@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>XC Ski 3D – WebSerial + Three.js</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  #ui{
+    position:fixed;top:10px;left:10px;
+    background:rgba(255,255,255,.88);
+    color:#111;
+    padding:12px 14px;border-radius:12px;
+    border:1px solid rgba(0,0,0,.10);
+    box-shadow:0 10px 30px rgba(0,0,0,.18);
+    backdrop-filter:blur(6px);
+    z-index:10
+  }
+  label{display:block;margin:8px 0 2px;font-size:12px;opacity:1}
+  input[type=range]{width:240px}
+  button{
+    padding:8px 12px;border-radius:10px;
+    border:1px solid rgba(0,0,0,.18);
+    background:#f3f5f7;color:#111;cursor:pointer
+  }
+  button:hover{filter:brightness(0.98)}
+  #status{font-size:12px;opacity:.9;margin-top:6px;min-height:1.2em;max-width:380px;color:#222}
+  .hint{font-size:12px;opacity:.9;margin-top:6px;color:#222}
+  #imuTable{border-collapse:collapse;margin-top:10px;font-size:12px}
+  #imuTable th,#imuTable td{border:1px solid rgba(0,0,0,.12);padding:4px 6px;text-align:right}
+  #imuTable th:first-child,#imuTable td:first-child{text-align:left}
+  #imuTable thead th{background:rgba(0,0,0,.04)}
+  canvas{display:block}
+</style>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="ui">
+  <button id="connectBtn">Connect</button>
+  <div id="status">Booting…</div>
+
+  <div id="liveReadout" style="margin-top:10px">
+    <div style="font-size:12px;opacity:.95;margin-bottom:4px">Live IMU values (deg)</div>
+    <table id="imuTable" aria-label="Live pitch and roll table">
+      <thead>
+        <tr><th>IMU</th><th>Pitch</th><th>Roll</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>0</td><td id="pRead0">—</td><td id="rRead0">—</td></tr>
+        <tr><td>1</td><td id="pRead1">—</td><td id="rRead1">—</td></tr>
+        <tr><td>2</td><td id="pRead2">—</td><td id="rRead2">—</td></tr>
+        <tr><td>3</td><td id="pRead3">—</td><td id="rRead3">—</td></tr>
+        <tr><td>4</td><td id="pRead4">—</td><td id="rRead4">—</td></tr>
+        <tr><td>5</td><td id="pRead5">—</td><td id="rRead5">—</td></tr>
+        <tr><td>6</td><td id="pRead6">—</td><td id="rRead6">—</td></tr>
+        <tr><td>7</td><td id="pRead7">—</td><td id="rRead7">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <label>Bend scale (×): <span id="bendVal">1</span></label>
+  <input id="bendScale" type="range" min="1" max="20" step="1" value="1"/>
+
+  <label>Torsion scale (×): <span id="torsVal">1</span></label>
+  <input id="torsScale" type="range" min="1" max="20" step="1" value="1"/>
+
+  <label>Smoothing (samples): <span id="smoothVal">5</span></label>
+  <input id="smoothN" type="range" min="1" max="20" step="1" value="5"/>
+
+  <div class="hint">
+    Press <b>Z</b> to zero (sends 'z' to Arduino)
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+/*** LOGGING ***/
+const statusEl = document.getElementById('status');
+const log = (m)=>{ console.log(m); statusEl.textContent = m; };
+
+/*** SPEC (meters) ***/
+const L_M        = 1.87;   // 1870 mm ski
+const BASE_W     = 0.045;  // 45 mm konstant bredde
+const HALF_W     = BASE_W/2;
+
+const T_CENTER   = 0.028;  // m (maks tykkelse midt)
+const T_END      = 0.002;  // m (tykkelse ved ender)
+
+const TIP_LEN    = 0.10;   // 100 mm oppbøyd tupp
+const ROCKER_MAX = 0.030;  // 30 mm oppbøyning
+const SEGMENTS   = 1870;   // ~1 mm per segment
+
+// --- Kontaktpunkter ved 0 last (meter bak tupp) ---
+const CONTACT_FRONT_FROM_TIP = 0.16; // m bak tupp
+const CONTACT_BACK_FROM_TIP  = 1.78; // m bak tupp
+
+// Sikre at skien aldri går under planet (kan løfte begge kontaktpunkter litt)
+const CLAMP_NO_PENETRATION = true;
+
+// Pitch-kompensasjon for at IMU ligger på skrå toppflate pga taper
+const TOP_SLOPE_COMP = 1.0; // 1.0 = full komp, 0.0 = av
+
+// IMU-posisjoner (fra skitupp) – REVERSED rekkefølge (0 er nå motsatt ende)
+const IMU_POS_ABS = [
+  L_M - 1.752, // imu0
+  L_M - 1.587, // imu1
+  L_M - 1.357, // imu2
+  L_M - 0.855, // imu3
+  L_M - 0.675, // imu4
+  L_M - 0.485, // imu5
+  L_M - 0.283, // imu6
+  L_M - 0.121  // imu7
+];
+
+// IMU-boks dimensjoner (meter)
+const IMU_L = 0.037;
+const IMU_W = 0.027;
+const IMU_H = 0.009;
+const IMU_LIFT = 0.001;
+
+/*** THREE ***/
+let renderer, scene, camera, controls;
+let spine, zList, zListCentered, imuPosCentered, skiInst;
+let imuMarkers, imuIdx;
+const tmpObj = new THREE.Object3D();
+let initialized = false;
+
+function init3D(){
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1f2530);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.01, 100);
+  camera.position.set(1.2, 0.6, 2.3);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0,0,0);
+  controls.update();
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 0.9));
+  const dir = new THREE.DirectionalLight(0xffffff,.8);
+  dir.position.set(1,2,1);
+  scene.add(dir);
+  scene.add(new THREE.GridHelper(4, 40, 0x445566, 0x333a46));
+
+  // samples langs lengden (0..L_M)
+  zList = Array.from({length: SEGMENTS+1}, (_,i)=> (i/SEGMENTS)*L_M);
+  zListCentered = zList.map(z => z - L_M/2);
+  imuPosCentered = IMU_POS_ABS.map(z => z - L_M/2);
+
+  // instanced bokser (ski)
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    metalness: 0.10,
+    roughness: 0.1
+  });
+
+  // bruk midttykkelse som "base", skaler per segment
+  const baseGeom = new THREE.BoxGeometry(2*HALF_W, T_CENTER, 1);
+  skiInst = new THREE.InstancedMesh(baseGeom, mat, SEGMENTS);
+  skiInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(skiInst);
+
+  // spine-linje
+  const spineGeom = new THREE.BufferGeometry();
+  spineGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array((SEGMENTS+1)*3), 3));
+  spine = new THREE.Line(spineGeom, new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity: 0.9 }));
+  scene.add(spine);
+
+  // IMU-markører
+  imuMarkers = new THREE.Group();
+  const imuGeo = new THREE.BoxGeometry(IMU_W, IMU_H, IMU_L);
+  const imuMat = new THREE.MeshStandardMaterial({
+    color: 0x333333,
+    roughness: 0.6,
+    metalness: 0.0
+  });
+
+  imuIdx = imuPosCentered.map(zc => {
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < zListCentered.length; i++){
+      const d = Math.abs(zListCentered[i] - zc);
+      if (d < bestD){ bestD = d; best = i; }
+    }
+    const mesh = new THREE.Mesh(imuGeo, imuMat);
+    mesh.castShadow = true;
+    mesh.position.set(0, 0, zListCentered[best]);
+    imuMarkers.add(mesh);
+    return best;
+  });
+  scene.add(imuMarkers);
+
+  initialized = true;
+
+  window.addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  (function loop(){
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  })();
+
+  log('Ready. Click Connect to choose COM port.');
+}
+init3D();
+
+/*** UI ***/
+const bendScaleEl= document.getElementById('bendScale');
+const torsScaleEl= document.getElementById('torsScale');
+const smoothEl   = document.getElementById('smoothN');
+document.getElementById('bendVal').textContent = bendScaleEl.value;
+document.getElementById('torsVal').textContent = torsScaleEl.value;
+document.getElementById('smoothVal').textContent = smoothEl.value;
+bendScaleEl.oninput = ()=> document.getElementById('bendVal').textContent  = bendScaleEl.value;
+torsScaleEl.oninput = ()=> document.getElementById('torsVal').textContent  = torsScaleEl.value;
+smoothEl.oninput    = ()=> document.getElementById('smoothVal').textContent = smoothEl.value;
+
+/*** SKI PROFIL (z i −L/2..+L/2) ***/
+function halfWidthAt(z){
+  const zTipStart = L_M/2 - TIP_LEN;
+  if (z >= zTipStart){
+    const t = Math.min(Math.max((z - zTipStart)/TIP_LEN, 0), 1);
+    const widthFactor = 0.3 + 0.7*(1 - t);
+    return HALF_W * widthFactor;
+  }
+  return HALF_W;
+}
+
+// tykkelse: maks i midten, min i endene (0.028 -> 0.002)
+function thicknessAt(z){
+  const u = z/(L_M/2);                // -1..+1
+  const f = Math.cos(0.5*Math.PI*u);  // 1 i midten, 0 i ender
+  return T_END + (T_CENTER - T_END) * (f*f);
+}
+
+function baselineY(z){
+  const camberAmp = 0.004, camberW = 0.25;
+  const camber = camberAmp * Math.exp(-(z*z)/(2*camberW*camberW));
+  const zTipStart = L_M/2 - TIP_LEN;
+  let tip = 0;
+  if (z >= zTipStart){
+    const t = Math.min(Math.max((z - zTipStart)/TIP_LEN, 0), 1);
+    tip = ROCKER_MAX * t * t;
+  }
+  return camber + tip;
+}
+
+function baselineSlope(z){
+  const h=0.002;
+  return (baselineY(z+h)-baselineY(z-h))/(2*h);
+}
+
+// slope av tykkelseprofilen
+function thicknessSlope(z){
+  const h=0.002;
+  return (thicknessAt(z+h) - thicknessAt(z-h)) / (2*h);
+}
+
+// toppflate helning (baseline + 1/2 tykkelse)
+function topSurfaceSlope(z){
+  return baselineSlope(z) + 0.5*thicknessSlope(z);
+}
+function topSurfaceAngleDeg(z){
+  return Math.atan(topSurfaceSlope(z)) * 180/Math.PI;
+}
+
+/*** DATA/INTERP ***/
+const N = 8;
+let pitch = new Array(N).fill(0.0); // deg
+let roll  = new Array(N).fill(0.0); // deg
+const pBuf = Array.from({length:N}, ()=>[]);
+const rBuf = Array.from({length:N}, ()=>[]);
+function pushAvg(bufs,i,v,maxN){ const a=bufs[i]; a.push(v); if(a.length>maxN) a.shift(); return a.reduce((s,x)=>s+x,0)/a.length; }
+
+function fmtDeg(v){ return Number.isFinite(v) ? v.toFixed(1) : '—'; }
+function updateReadout(){
+  for(let i=0;i<8;i++){
+    const pEl = document.getElementById('pRead'+i);
+    const rEl = document.getElementById('rRead'+i);
+    if (pEl) pEl.textContent = fmtDeg(pitch[i]);
+    if (rEl) rEl.textContent = fmtDeg(roll[i]);
+  }
+}
+
+function lerp(a,b,t){return a+(b-a)*t;}
+function interp1d(xS, vS, xq){
+  const out = new Array(xq.length);
+  for(let i=0;i<xq.length;i++){
+    const x = xq[i];
+    if (x <= xS[0]) { out[i]=vS[0]; continue; }
+    const last = xS.length-1;
+    if (x >= xS[last]){ out[i]=vS[last]; continue; }
+    let k=0;
+    while(!(xS[k] <= x && x <= xS[k+1])) k++;
+    const t = (x - xS[k])/(xS[k+1]-xS[k]);
+    out[i] = lerp(vS[k], vS[k+1], t);
+  }
+  return out;
+}
+
+function nearestIndexByZCentered(zc){
+  let best = 0, bestD = Infinity;
+  for (let i=0;i<zListCentered.length;i++){
+    const d = Math.abs(zListCentered[i] - zc);
+    if (d < bestD){ bestD = d; best = i; }
+  }
+  return best;
+}
+
+/*** OPPDATER RENDER ***/
+function updateDeform(){
+  if (!initialized) return;
+
+  const bendK = parseFloat(bendScaleEl.value);
+  const torsK = parseFloat(torsScaleEl.value);
+
+  // Pitch: korriger bort top-surface helning per IMU først
+  const pitchCorr = pitch.map((p,i)=>{
+    const zMat = imuPosCentered[i];
+    return p - TOP_SLOPE_COMP * topSurfaceAngleDeg(zMat);
+  });
+
+  // Fjern rigid-body (etter korreksjon)
+  const meanPitch = pitchCorr.reduce((s,v)=>s+v,0)/pitchCorr.length;
+  const pitchRel  = pitchCorr.map(p => p - meanPitch);
+
+  // Roll: anta ingen falsk torsjon (flat sideveis)
+  const meanRoll  = roll.reduce((s,v)=>s+v,0)/roll.length;
+  const rollRel   = roll.map(r => r - meanRoll);
+
+  // Sorter etter posisjon
+  const order = [...Array(N).keys()].sort((a,b)=> imuPosCentered[a] - imuPosCentered[b]);
+  const imuPosSorted   = order.map(i => imuPosCentered[i]);
+  const pitchSortedRel = order.map(i => pitchRel[i]);
+  const rollSortedRel  = order.map(i => rollRel[i]);
+
+  const pitches = interp1d(imuPosSorted, pitchSortedRel, zListCentered);
+  const rolls   = interp1d(imuPosSorted, rollSortedRel,  zListCentered);
+
+  // ---------------------------------------------------------
+  // (A) INEXTENSIBLE CENTERLINE (world y,z)
+  // ---------------------------------------------------------
+  const yW = new Array(zListCentered.length).fill(0);
+  const zW = new Array(zListCentered.length).fill(0);
+
+  yW[0] = baselineY(zListCentered[0]);
+  zW[0] = zListCentered[0];
+
+  for (let i = 1; i < zListCentered.length; i++) {
+    const ds = zList[i] - zList[i-1];
+    const zMidMat = 0.5 * (zListCentered[i-1] + zListCentered[i]);
+
+    const th0 = Math.atan(baselineSlope(zMidMat));
+    const thDyn = (-0.5*(pitches[i-1] + pitches[i]) * Math.PI/180) * bendK;
+    const th = th0 + thDyn;
+
+    yW[i] = yW[i-1] + Math.sin(th) * ds;
+    zW[i] = zW[i-1] + Math.cos(th) * ds;
+  }
+
+  // ---------------------------------------------------------
+  // (B) TWO FIXED CONTACTS (given as meters behind tip)
+  // zCentered = (L/2) - dist
+  // ---------------------------------------------------------
+  const zcFront = (L_M/2) - CONTACT_FRONT_FROM_TIP;
+  const zcBack  = (L_M/2) - CONTACT_BACK_FROM_TIP;
+
+  let iFront = nearestIndexByZCentered(zcFront);
+  let iBack  = nearestIndexByZCentered(zcBack);
+
+  // front skal ligge foran back i world-z
+  if (zW[iFront] < zW[iBack]) { const tmp=iFront; iFront=iBack; iBack=tmp; }
+
+  const yBottomFront = yW[iFront] - 0.5*thicknessAt(zListCentered[iFront]);
+  const yBottomBack  = yW[iBack]  - 0.5*thicknessAt(zListCentered[iBack]);
+
+  const zFrontW = zW[iFront];
+  const zBackW  = zW[iBack];
+
+  // Pivot = bak-kontakt
+  const zB = zBackW;
+  const yB = yBottomBack;
+
+  const yF0 = (yBottomFront - yB);
+  const zF0 = (zFrontW - zB);
+
+  let phi = 0;
+  if (Math.abs(zF0) > 1e-9 || Math.abs(yF0) > 1e-9) phi = Math.atan2(yF0, zF0);
+
+  // minste rotasjon for å unngå flip
+  if (phi >  Math.PI/2) phi -= Math.PI;
+  if (phi < -Math.PI/2) phi += Math.PI;
+
+  const c = Math.cos(phi), s = Math.sin(phi);
+
+  function applyGroundTransform(y, z){
+    const y0 = y - yB;
+    const z0 = z - zB;
+    const yR = y0*c - z0*s;
+    const zR = y0*s + z0*c;
+    return { y: yR, z: zR + zB };
+  }
+
+  // Ekstra løft for å hindre penetrasjon (valgfritt)
+  let extraLift = 0;
+  if (CLAMP_NO_PENETRATION){
+    let minBottomAll = Infinity;
+    for (let i=0;i<zListCentered.length;i++){
+      const P = applyGroundTransform(yW[i], zW[i]);
+      const yBottom = P.y - 0.5*thicknessAt(zListCentered[i]);
+      if (yBottom < minBottomAll) minBottomAll = yBottom;
+    }
+    if (minBottomAll < 0) extraLift = -minBottomAll;
+  }
+
+  // Re-sentrer i z
+  const P0 = applyGroundTransform(yW[0], zW[0]);
+  const PN = applyGroundTransform(yW[yW.length-1], zW[zW.length-1]);
+  const zCenter = 0.5 * (P0.z + PN.z);
+
+  function GT(y, z){
+    const P = applyGroundTransform(y, z);
+    return { y: P.y + extraLift, z: P.z - zCenter };
+  }
+
+  // ---------------------------------------------------------
+  // Spine
+  // ---------------------------------------------------------
+  const sp = spine.geometry.attributes.position.array;
+  for(let i=0;i<=SEGMENTS;i++){
+    const P = GT(yW[i], zW[i]);
+    sp[i*3+0] = 0;
+    sp[i*3+1] = P.y;
+    sp[i*3+2] = P.z;
+  }
+  spine.geometry.attributes.position.needsUpdate = true;
+
+  // ---------------------------------------------------------
+  // Segments
+  // ---------------------------------------------------------
+  for (let i=1;i<=SEGMENTS;i++){
+    const ds = zList[i] - zList[i-1];
+
+    const yMid = 0.5*(yW[i-1] + yW[i]);
+    const zMid = 0.5*(zW[i-1] + zW[i]);
+    const P = GT(yMid, zMid);
+
+    const zMidMat = 0.5*(zListCentered[i-1] + zListCentered[i]);
+
+    const wSeg = halfWidthAt(zMidMat);
+    const tSeg = thicknessAt(zMidMat);
+
+    const th0   = Math.atan(baselineSlope(zMidMat));
+    const thDyn = (0.5*(pitches[i-1]+pitches[i]) * Math.PI/180) * bendK;
+    const rr    = (-0.5*(rolls[i-1]+rolls[i]) * Math.PI/180) * torsK;
+
+    tmpObj.position.set(0, P.y, P.z);
+    tmpObj.rotation.set((th0 + thDyn) + phi, 0, rr);
+
+    // baseGeom har T_CENTER, skaler til lokal tSeg
+    tmpObj.scale.set((wSeg / HALF_W), (tSeg / T_CENTER), ds);
+
+    tmpObj.updateMatrix();
+    skiInst.setMatrixAt(i-1, tmpObj.matrix);
+  }
+  skiInst.instanceMatrix.needsUpdate = true;
+
+  // ---------------------------------------------------------
+  // IMU markers
+  // ---------------------------------------------------------
+  if (imuMarkers){
+    for (let j = 0; j < imuMarkers.children.length; j++){
+      const idx = imuIdx[j];
+      const zMat = zListCentered[idx];
+      const tSeg  = thicknessAt(zMat);
+
+      const P = GT(yW[idx], zW[idx]);
+      const yBase = P.y;
+      const zBase = P.z;
+
+      const y = yBase + 0.5*tSeg + IMU_LIFT + 0.5*IMU_H;
+      imuMarkers.children[j].position.set(0, y, zBase);
+    }
+  }
+
+  updateReadout();
+}
+
+/*** WEB SERIAL ***/
+let port, reader, buf = "";
+
+// Arduino logger output is TAB-separated:
+// time_ms\tp0..p7\tr0..r7
+function parseTSVLine(line){
+  const s = line.trim();
+  if (!s) return null;
+  if (s.startsWith("time_ms")) return null;
+  if (s.startsWith("###")) return null;
+  if (s.startsWith("Boot:")) return null;
+  if (s.startsWith("OpenLog:")) return null;
+  if (s.startsWith("IMU ")) return null;
+
+  const parts = s.includes("\t") ? s.split(/\t+/) : s.split(/\s+/);
+  if (parts.length < 1 + 8 + 8) return null;
+
+  const time_ms = Number(parts[0]);
+  const roll = new Array(8);
+  const pitch = new Array(8);
+
+  // p0..p7 (ROLL)
+  for (let i=0;i<8;i++){
+    const v = Number(parts[1+i]);
+    roll[i] = (Number.isFinite(v) && v !== -999.9) ? v : NaN;
+  }
+  // r0..r7 (PITCH)
+  for (let i=0;i<8;i++){
+    const v = Number(parts[1+8+i]);
+    pitch[i] = (Number.isFinite(v) && v !== -999.9) ? v : NaN;
+  }
+
+  return { time_ms, roll, pitch };
+}
+
+async function connect(){
+  try{
+    if (!('serial' in navigator)) { log('WebSerial not supported (use Chrome/Edge via localhost/https)'); return; }
+    log('Opening port…');
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    log('Connected. Reading…');
+
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    reader = textDecoder.readable.getReader();
+    readLoop();
+  }catch(e){
+    console.error(e);
+    log(`Connect failed: ${e.name||''} ${e.message||''}`.trim());
+  }
+}
+document.getElementById('connectBtn').addEventListener('click', connect);
+
+window.addEventListener('keydown', async e=>{
+  if((e.key==='z' || e.key==='Z') && port?.writable){
+    const w = port.writable.getWriter();
+    await w.write(new TextEncoder().encode('z\n'));
+    w.releaseLock();
+    buf = "";
+    log("Sent 'z'");
+  }
+});
+
+async function readLoop(){
+  try{
+    while(true){
+      const {value, done} = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      buf += value;
+      let lastNL = Math.max(buf.lastIndexOf("\n"), buf.lastIndexOf("\r"));
+      if (lastNL < 0) continue;
+
+      const head = buf.slice(0, lastNL);
+      buf = buf.slice(lastNL+1);
+      const lines = head.split(/\r?\n/).filter(s=>s.trim().length);
+      if (!lines.length) continue;
+
+      const s = lines[lines.length-1];
+      const parsed = parseTSVLine(s);
+      if (!parsed) continue;
+
+      const nSmooth = parseInt(smoothEl.value, 10);
+
+      for (let i = 0; i < 8; i++) {
+        // SWAP i input (som i originalen din)
+        const pIn = parsed.roll[i];   // p* -> PITCH
+        const rIn = parsed.pitch[i];  // r* -> ROLL
+
+        // Invert begge
+        const pVal = Number.isFinite(pIn) ? -pIn : pIn;
+        const rVal = Number.isFinite(rIn) ? -rIn : rIn;
+
+        if (Number.isFinite(pVal)) pitch[i] = pushAvg(pBuf, i, pVal, nSmooth);
+        if (Number.isFinite(rVal)) roll[i]  = pushAvg(rBuf,  i, rVal, nSmooth);
+      }
+
+      updateDeform();
+    }
+  }catch(e){
+    console.error('readLoop error:', e);
+    log('Read error: '+(e.message||e.name));
+  }finally{
+    try { reader?.releaseLock(); } catch {}
+  }
+}
+
+/*** tegn baseline med en gang ***/
+updateDeform();
+</script>
+</body>
+</html>

@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>XC Ski 3D – Offline log player (synced with live)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  #ui{position:fixed;top:10px;left:10px;background:rgba(255,255,255,.92);color:#0b0d12;padding:8px 10px;border-radius:10px;backdrop-filter:blur(8px);z-index:10;border:1px solid rgba(0,0,0,.10);box-shadow:0 8px 22px rgba(0,0,0,.18);max-width:260px}
+  label{display:block;margin:6px 0 2px;font-size:11px;opacity:1}
+  input[type=range]{width:240px;max-width:240px}
+  button{padding:6px 10px;border-radius:9px;border:1px solid rgba(0,0,0,.18);background:#f3f4f6;color:#0b0d12;cursor:pointer;font-size:12px}
+  button:hover{filter:brightness(.98)}
+  #status{font-size:11px;opacity:.92;margin-top:6px;min-height:1.2em;max-width:260px}
+  canvas{display:block}
+  #rpTable{margin-top:6px;border-collapse:collapse;font-size:12px;width:100%}
+  #rpTable th,#rpTable td{padding:1px 4px;border-bottom:1px solid rgba(0,0,0,.12);text-align:right;font-size:11px}
+  #rpTable th:first-child,#rpTable td:first-child{text-align:left}
+  #rpTable thead th{opacity:.85;font-weight:600}
+  #rpTable tbody tr:last-child td{border-bottom:none}
+</style>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="ui">
+  <button id="loadBtn">Load log file</button>
+  <button id="playBtn" disabled>Play</button>
+  <div id="status">Booting…</div>
+
+  <label>Timeline: <span id="tVal">0.00</span> s</label>
+  <input id="timeScrub" type="range" min="0" max="1" step="0.001" value="0" disabled />
+
+  <label>Speed (×): <span id="speedVal">1.0</span></label>
+  <input id="speed" type="range" min="0.1" max="4" step="0.1" value="1.0"/>
+
+  <label>Bend scale (×): <span id="bendVal">1.0</span></label>
+  <input id="bendScale" type="range" min="0" max="20" step="0.1" value="1.0"/>
+  <label>Torsion scale (×): <span id="torsVal">1.0</span></label>
+  <input id="torsScale" type="range" min="0" max="20" step="0.1" value="1.0"/>
+<div id="rpBox" style="margin-top:10px">
+    <div style="font-size:12px;opacity:.9">Roll / Pitch (deg)</div>
+    <table id="rpTable">
+      <thead><tr><th>IMU</th><th>Roll</th><th>Pitch</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td><span id="rNum0">0.0</span></td><td><span id="pNum0">0.0</span></td></tr>
+        <tr><td>1</td><td><span id="rNum1">0.0</span></td><td><span id="pNum1">0.0</span></td></tr>
+        <tr><td>2</td><td><span id="rNum2">0.0</span></td><td><span id="pNum2">0.0</span></td></tr>
+        <tr><td>3</td><td><span id="rNum3">0.0</span></td><td><span id="pNum3">0.0</span></td></tr>
+        <tr><td>4</td><td><span id="rNum4">0.0</span></td><td><span id="pNum4">0.0</span></td></tr>
+        <tr><td>5</td><td><span id="rNum5">0.0</span></td><td><span id="pNum5">0.0</span></td></tr>
+        <tr><td>6</td><td><span id="rNum6">0.0</span></td><td><span id="pNum6">0.0</span></td></tr>
+        <tr><td>7</td><td><span id="rNum7">0.0</span></td><td><span id="pNum7">0.0</span></td></tr>
+        <tr><td><b>Mean</b></td><td><span id="rMean">0.0</span></td><td><span id="pMean">0.0</span></td></tr>
+      </tbody>
+    </table>
+    <div id="rpNote" style="font-size:10px;opacity:.7;margin-top:4px">Values shown are the ones used for the visualization.</div>
+  </div>
+
+  <div style="font-size:11px;opacity:.8;margin-top:6px">Press <b>Z</b> to zero</div>
+
+  <input id="fileInput" type="file" accept=".txt,.csv,.tsv" style="display:none" />
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+/*** LOGGING ***/
+const statusEl = document.getElementById('status');
+const log = (m)=>{ console.log(m); statusEl.textContent = m; };
+
+/*** SPEC (meters) – synced with live ***/
+const L_M        = 1.87;
+const BASE_W     = 0.045;
+const HALF_W     = BASE_W/2;
+
+const T_CENTER   = 0.028;  // max thickness at mid
+const T_END      = 0.002;  // thickness at ends
+
+const TIP_LEN    = 0.10;
+const ROCKER_MAX = 0.030;
+const SEGMENTS   = 1870;
+
+// Contact points at 0 load (meters behind tip)
+const CONTACT_FRONT_FROM_TIP = 0.16;
+const CONTACT_BACK_FROM_TIP  = 1.78;
+
+const CLAMP_NO_PENETRATION = true;
+const TOP_SLOPE_COMP = 1.0;
+
+// IMU positions (from tip) – reversed mapping (same as live)
+const IMU_POS_ABS = [
+  L_M - 1.752, // imu0
+  L_M - 1.587, // imu1
+  L_M - 1.357, // imu2
+  L_M - 0.855, // imu3
+  L_M - 0.675, // imu4
+  L_M - 0.485, // imu5
+  L_M - 0.283, // imu6
+  L_M - 0.121  // imu7
+];
+
+// IMU box dimensions (meter) – same as live
+const IMU_L = 0.037;
+const IMU_W = 0.027;
+const IMU_H = 0.009;
+const IMU_LIFT = 0.001;
+
+/*** THREE ***/
+let renderer, scene, camera, controls;
+let spine, zList, zListCentered, imuPosCentered, skiInst;
+let imuMarkers, imuIdx;
+const tmpObj = new THREE.Object3D();
+let initialized = false;
+
+function init3D(){
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1f2530);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.01, 100);
+  camera.position.set(1.2, 0.6, 2.3);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0,0,0);
+  controls.update();
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 0.9));
+  const dir = new THREE.DirectionalLight(0xffffff,.8);
+  dir.position.set(1,2,1);
+  scene.add(dir);
+  scene.add(new THREE.GridHelper(4, 40, 0x445566, 0x333a46));
+
+  // samples along length (0..L)
+  zList = Array.from({length: SEGMENTS+1}, (_,i)=> (i/SEGMENTS)*L_M);
+  zListCentered = zList.map(z => z - L_M/2);
+  imuPosCentered = IMU_POS_ABS.map(z => z - L_M/2);
+
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.10, roughness: 0.1 });
+
+  // base thickness = T_CENTER, scaled per segment
+  const baseGeom = new THREE.BoxGeometry(2*HALF_W, T_CENTER, 1);
+  skiInst = new THREE.InstancedMesh(baseGeom, mat, SEGMENTS);
+  skiInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(skiInst);
+
+  // spine line
+  const spineGeom = new THREE.BufferGeometry();
+  spineGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array((SEGMENTS+1)*3), 3));
+  spine = new THREE.Line(spineGeom, new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity: 0.9 }));
+  scene.add(spine);
+
+  // IMU markers (boxes)
+  imuMarkers = new THREE.Group();
+  const imuGeo = new THREE.BoxGeometry(IMU_W, IMU_H, IMU_L);
+  const imuMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.6, metalness: 0.0 });
+
+  imuIdx = imuPosCentered.map(zc => {
+    let best = 0, bestD = Infinity;
+    for (let i=0;i<zListCentered.length;i++){
+      const d = Math.abs(zListCentered[i] - zc);
+      if (d < bestD){ bestD = d; best = i; }
+    }
+    const mesh = new THREE.Mesh(imuGeo, imuMat);
+    mesh.castShadow = true;
+    mesh.position.set(0, 0, zListCentered[best]); // y set in updateDeform
+    imuMarkers.add(mesh);
+    return best;
+  });
+  scene.add(imuMarkers);
+
+  initialized = true;
+
+  window.addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  (function loop(){
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  })();
+
+  log('Ready. Click "Load log file" to select a TSV log.');
+}
+init3D();
+
+/*** UI ***/
+const bendScaleEl= document.getElementById('bendScale');
+const torsScaleEl= document.getElementById('torsScale');
+
+/*** SKI PROFILE (material z in −L/2..+L/2) ***/
+function halfWidthAt(z){
+  const zTipStart = L_M/2 - TIP_LEN;
+  if (z >= zTipStart){
+    const t = Math.min(Math.max((z - zTipStart)/TIP_LEN, 0), 1);
+    const widthFactor = 0.3 + 0.7*(1 - t);
+    return HALF_W * widthFactor;
+  }
+  return HALF_W;
+}
+
+// thickness: max at mid, min at ends (0.028 -> 0.002)
+function thicknessAt(z){
+  const u = z/(L_M/2);                // -1..+1
+  const f = Math.cos(0.5*Math.PI*u);  // 1 at mid, 0 at ends
+  return T_END + (T_CENTER - T_END) * (f*f);
+}
+
+function baselineY(z){
+  const camberAmp = 0.004, camberW = 0.25;
+  const camber = camberAmp * Math.exp(-(z*z)/(2*camberW*camberW));
+  const zTipStart = L_M/2 - TIP_LEN;
+  let tip = 0;
+  if (z >= zTipStart){
+    const t = Math.min(Math.max((z - zTipStart)/TIP_LEN, 0), 1);
+    tip = ROCKER_MAX * t * t;
+  }
+  return camber + tip;
+}
+
+function baselineSlope(z){
+  const h=0.002;
+  return (baselineY(z+h)-baselineY(z-h))/(2*h);
+}
+
+function thicknessSlope(z){
+  const h=0.002;
+  return (thicknessAt(z+h) - thicknessAt(z-h)) / (2*h);
+}
+
+function topSurfaceSlope(z){
+  return baselineSlope(z) + 0.5*thicknessSlope(z);
+}
+function topSurfaceAngleDeg(z){
+  return Math.atan(topSurfaceSlope(z)) * 180/Math.PI;
+}
+
+/*** DATA/INTERP ***/
+const N = 8;
+let pitch = new Array(N).fill(0.0); // deg (the ones used by viz)
+let roll  = new Array(N).fill(0.0); // deg (the ones used by viz)
+const pBuf = Array.from({length:N}, ()=>[]);
+const rBuf = Array.from({length:N}, ()=>[]);
+
+/*** ROLL/PITCH NUMBERS UI ***/
+const pNumEls = Array.from({length:N}, (_,k)=>document.getElementById(`pNum${k}`));
+const rNumEls = Array.from({length:N}, (_,k)=>document.getElementById(`rNum${k}`));
+const pMeanEl = document.getElementById('pMean');
+const rMeanEl = document.getElementById('rMean');
+
+function updateNumbers(){
+  for (let k=0;k<N;k++){
+    if (pNumEls[k]) pNumEls[k].textContent = pitch[k].toFixed(1);
+    if (rNumEls[k]) rNumEls[k].textContent = roll[k].toFixed(1);
+  }
+  const mp = pitch.reduce((s,v)=>s+v,0)/pitch.length;
+  const mr = roll.reduce((s,v)=>s+v,0)/roll.length;
+  if (pMeanEl) pMeanEl.textContent = mp.toFixed(1);
+  if (rMeanEl) rMeanEl.textContent = mr.toFixed(1);
+}
+
+function pushAvg(bufs,i,v,maxN){ const a=bufs[i]; a.push(v); if(a.length>maxN) a.shift(); return a.reduce((s,x)=>s+x,0)/a.length; }
+function lerp(a,b,t){return a+(b-a)*t;}
+function interp1d(xS, vS, xq){
+  const out = new Array(xq.length);
+  for(let i=0;i<xq.length;i++){
+    const x = xq[i];
+    if (x <= xS[0]) { out[i]=vS[0]; continue; }
+    const last = xS.length-1;
+    if (x >= xS[last]){ out[i]=vS[last]; continue; }
+    let k=0;
+    while(!(xS[k] <= x && x <= xS[k+1])) k++;
+    const t = (x - xS[k])/(xS[k+1]-xS[k]);
+    out[i] = lerp(vS[k], vS[k+1], t);
+  }
+  return out;
+}
+
+function nearestIndexByZCentered(zc){
+  let best = 0, bestD = Infinity;
+  for (let i=0;i<zListCentered.length;i++){
+    const d = Math.abs(zListCentered[i] - zc);
+    if (d < bestD){ bestD = d; best = i; }
+  }
+  return best;
+}
+
+/*** DEFORM (same as live) ***/
+function updateDeform(){
+  if (!initialized) return;
+
+  const bendK = parseFloat(bendScaleEl.value);
+  const torsK = parseFloat(torsScaleEl.value);
+
+  // Pitch: compensate top-surface slope per IMU first
+  const pitchCorr = pitch.map((p,i)=>{
+    const zMat = imuPosCentered[i];
+    return p - TOP_SLOPE_COMP * topSurfaceAngleDeg(zMat);
+  });
+
+  // Remove rigid-body after compensation
+  const meanPitch = pitchCorr.reduce((s,v)=>s+v,0)/pitchCorr.length;
+  const pitchRel  = pitchCorr.map(p => p - meanPitch);
+
+  // Roll: assume no false torsion
+  const meanRoll  = roll.reduce((s,v)=>s+v,0)/roll.length;
+  const rollRel   = roll.map(r => r - meanRoll);
+
+  // Sort by position
+  const order = [...Array(N).keys()].sort((a,b)=> imuPosCentered[a] - imuPosCentered[b]);
+  const imuPosSorted   = order.map(i => imuPosCentered[i]);
+  const pitchSortedRel = order.map(i => pitchRel[i]);
+  const rollSortedRel  = order.map(i => rollRel[i]);
+
+  const pitches = interp1d(imuPosSorted, pitchSortedRel, zListCentered);
+  const rolls   = interp1d(imuPosSorted, rollSortedRel,  zListCentered);
+
+  // (A) inextensible centerline in world y,z
+  const yW = new Array(zListCentered.length).fill(0);
+  const zW = new Array(zListCentered.length).fill(0);
+
+  yW[0] = baselineY(zListCentered[0]);
+  zW[0] = zListCentered[0];
+
+  for (let i=1;i<zListCentered.length;i++){
+    const ds = zList[i] - zList[i-1];
+    const zMidMat = 0.5*(zListCentered[i-1] + zListCentered[i]);
+
+    const th0 = Math.atan(baselineSlope(zMidMat));
+    const thDyn = (-0.5*(pitches[i-1] + pitches[i]) * Math.PI/180) * bendK;
+    const th = th0 + thDyn;
+
+    yW[i] = yW[i-1] + Math.sin(th) * ds;
+    zW[i] = zW[i-1] + Math.cos(th) * ds;
+  }
+
+  // (B) two fixed contacts
+  const zcFront = (L_M/2) - CONTACT_FRONT_FROM_TIP;
+  const zcBack  = (L_M/2) - CONTACT_BACK_FROM_TIP;
+
+  let iFront = nearestIndexByZCentered(zcFront);
+  let iBack  = nearestIndexByZCentered(zcBack);
+
+  if (zW[iFront] < zW[iBack]) { const tmp=iFront; iFront=iBack; iBack=tmp; }
+
+  const yBottomFront = yW[iFront] - 0.5*thicknessAt(zListCentered[iFront]);
+  const yBottomBack  = yW[iBack]  - 0.5*thicknessAt(zListCentered[iBack]);
+
+  const zFrontW = zW[iFront];
+  const zBackW  = zW[iBack];
+
+  // pivot at back contact
+  const zB = zBackW;
+  const yB = yBottomBack;
+
+  const yF0 = (yBottomFront - yB);
+  const zF0 = (zFrontW - zB);
+
+  let phi = 0;
+  if (Math.abs(zF0) > 1e-9 || Math.abs(yF0) > 1e-9) phi = Math.atan2(yF0, zF0);
+
+  if (phi >  Math.PI/2) phi -= Math.PI;
+  if (phi < -Math.PI/2) phi += Math.PI;
+
+  const c = Math.cos(phi), s = Math.sin(phi);
+
+  function applyGroundTransform(y, z){
+    const y0 = y - yB;
+    const z0 = z - zB;
+    const yR = y0*c - z0*s;
+    const zR = y0*s + z0*c;
+    return { y: yR, z: zR + zB };
+  }
+
+  let extraLift = 0;
+  if (CLAMP_NO_PENETRATION){
+    let minBottomAll = Infinity;
+    for (let i=0;i<zListCentered.length;i++){
+      const P = applyGroundTransform(yW[i], zW[i]);
+      const yBottom = P.y - 0.5*thicknessAt(zListCentered[i]);
+      if (yBottom < minBottomAll) minBottomAll = yBottom;
+    }
+    if (minBottomAll < 0) extraLift = -minBottomAll;
+  }
+
+  // re-center in z for camera
+  const P0 = applyGroundTransform(yW[0], zW[0]);
+  const PN = applyGroundTransform(yW[yW.length-1], zW[zW.length-1]);
+  const zCenter = 0.5 * (P0.z + PN.z);
+
+  function GT(y, z){
+    const P = applyGroundTransform(y, z);
+    return { y: P.y + extraLift, z: P.z - zCenter };
+  }
+
+  // spine
+  const sp = spine.geometry.attributes.position.array;
+  for (let i=0;i<=SEGMENTS;i++){
+    const P = GT(yW[i], zW[i]);
+    sp[i*3+0] = 0;
+    sp[i*3+1] = P.y;
+    sp[i*3+2] = P.z;
+  }
+  spine.geometry.attributes.position.needsUpdate = true;
+
+  // segments
+  for (let i=1;i<=SEGMENTS;i++){
+    const ds = zList[i] - zList[i-1];
+
+    const yMid = 0.5*(yW[i-1] + yW[i]);
+    const zMid = 0.5*(zW[i-1] + zW[i]);
+    const P = GT(yMid, zMid);
+
+    const zMidMat = 0.5*(zListCentered[i-1] + zListCentered[i]);
+
+    const wSeg = halfWidthAt(zMidMat);
+    const tSeg = thicknessAt(zMidMat);
+
+    const th0   = Math.atan(baselineSlope(zMidMat));
+    const thDyn = (0.5*(pitches[i-1]+pitches[i]) * Math.PI/180) * bendK;
+    const rr    = (-0.5*(rolls[i-1]+rolls[i]) * Math.PI/180) * torsK;
+
+    tmpObj.position.set(0, P.y, P.z);
+    tmpObj.rotation.set((th0 + thDyn) + phi, 0, rr);
+    tmpObj.scale.set((wSeg / HALF_W), (tSeg / T_CENTER), ds);
+    tmpObj.updateMatrix();
+    skiInst.setMatrixAt(i-1, tmpObj.matrix);
+  }
+  skiInst.instanceMatrix.needsUpdate = true;
+
+  // IMU boxes on top
+  if (imuMarkers){
+    for (let j=0;j<imuMarkers.children.length;j++){
+      const idx = imuIdx[j];
+      const zMat = zListCentered[idx];
+      const tSeg = thicknessAt(zMat);
+
+      const P = GT(yW[idx], zW[idx]);
+      const yBase = P.y;
+      const zBase = P.z;
+
+      const y = yBase + 0.5*tSeg + IMU_LIFT + 0.5*IMU_H;
+      imuMarkers.children[j].position.set(0, y, zBase);
+    }
+  }
+}
+
+/*** OFFLINE LOG PLAYBACK (TSV) ***/
+const fileInput = document.getElementById('fileInput');
+const loadBtn    = document.getElementById('loadBtn');
+const playBtn    = document.getElementById('playBtn');
+const scrubEl    = document.getElementById('timeScrub');
+const speedEl    = document.getElementById('speed');
+document.getElementById('speedVal').textContent = speedEl.value;
+
+let samples = [];      // {tMs:number, p:number[8], r:number[8]} where p=first 8 cols, r=next 8 cols
+let t0Ms = 0, tEndMs = 0;
+let playing = false;
+let idx = 0;
+let wall0 = 0;
+let playT0 = 0;
+
+// Zero offsets (in oriented space used by viz)
+let pZero = new Array(N).fill(0.0); // pitch zero
+let rZero = new Array(N).fill(0.0); // roll zero
+
+function resetSmoothing(){
+  for (let i=0;i<N;i++){ pBuf[i].length = 0; rBuf[i].length = 0; }
+}
+
+// Same orientation mapping as live:
+// - file cols: first 8 = "roll" (Arduino p0..p7), next 8 = "pitch" (Arduino r0..r7)
+// - viz uses: pitch <- -first8, roll <- -next8
+function orientedFromSample(s, k){
+  const pVal = -s.p[k]; // becomes pitch, inverted
+  const rVal = -s.r[k]; // becomes roll, inverted
+  return { pVal, rVal };
+}
+
+function applySample(i, forceNoSmooth=false){
+  if (!samples.length) return;
+  i = Math.max(0, Math.min(samples.length-1, i));
+  const s = samples[i];
+
+  const nSmooth = 1; // smoothing removed (always 1 sample)
+
+  for (let k=0;k<N;k++){
+    const {pVal, rVal} = orientedFromSample(s, k);
+
+    const pUse = pVal - pZero[k];
+    const rUse = rVal - rZero[k];
+
+    pitch[k] = pushAvg(pBuf, k, pUse, nSmooth);
+    roll[k]  = pushAvg(rBuf, k, rUse, nSmooth);
+  }
+
+  updateNumbers();
+  updateDeform();
+
+  const tSecAbs = s.tMs / 1000;
+  document.getElementById('tVal').textContent = tSecAbs.toFixed(2);
+  scrubEl.value = String((s.tMs - t0Ms) / (tEndMs - t0Ms || 1));
+}
+
+function parseLog(text){
+  const lines = text.split(/\r?\n/);
+  let header = null;
+  const out = [];
+
+  for (const raw of lines){
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('#')) continue;
+    if (line.startsWith('###')) continue;
+
+    const parts = line.split(/\t|,|;/).map(s=>s.trim());
+    if (!parts.length) continue;
+
+    if (!header){
+      if (parts[0].toLowerCase().includes('time')) header = parts;
+      continue;
+    }
+
+    if (parts.length < 17) continue;
+    const tMs = Number(parts[0]);
+    if (!Number.isFinite(tMs)) continue;
+
+    const p = new Array(8);
+    const r = new Array(8);
+    for (let i=0;i<8;i++) p[i] = Number(parts[1+i]);
+    for (let i=0;i<8;i++) r[i] = Number(parts[1+8+i]);
+
+    if (p.some(v=>!Number.isFinite(v)) || r.some(v=>!Number.isFinite(v))) continue;
+    out.push({ tMs, p, r });
+  }
+
+  out.sort((a,b)=>a.tMs-b.tMs);
+  const uniq = [];
+  let last = -Infinity;
+  for (const s of out){
+    if (s.tMs !== last){ uniq.push(s); last = s.tMs; }
+  }
+  return uniq;
+}
+
+function stop(){
+  playing = false;
+  playBtn.textContent = 'Play';
+}
+
+function play(){
+  if (!samples.length) return;
+  playing = true;
+  playBtn.textContent = 'Pause';
+  wall0 = performance.now();
+  const tNow = t0Ms + parseFloat(scrubEl.value) * (tEndMs - t0Ms);
+  playT0 = tNow;
+
+  idx = 0;
+  while (idx < samples.length-1 && samples[idx].tMs < tNow) idx++;
+  resetSmoothing();
+  applySample(idx, true);
+}
+
+function togglePlay(){
+  if (!samples.length) return;
+  if (playing) stop();
+  else play();
+}
+
+function tick(){
+  requestAnimationFrame(tick);
+  if (!playing || !samples.length) return;
+
+  const speed = parseFloat(speedEl.value);
+  const tNow = playT0 + (performance.now() - wall0) * speed;
+
+  while (idx < samples.length-1 && samples[idx].tMs < tNow) idx++;
+  applySample(idx);
+
+  if (idx >= samples.length-1) stop();
+}
+tick();
+
+// UI wiring
+speedEl.oninput = ()=> document.getElementById('speedVal').textContent = speedEl.value;
+loadBtn.addEventListener('click', ()=> fileInput.click());
+
+fileInput.addEventListener('change', async ()=>{
+  const f = fileInput.files?.[0];
+  if (!f) return;
+  stop();
+  log(`Loading ${f.name}…`);
+  const text = await f.text();
+  samples = parseLog(text);
+
+  if (!samples.length){
+    log('No valid samples found in file.');
+    playBtn.disabled = true;
+    scrubEl.disabled = true;
+    return;
+  }
+
+  t0Ms = samples[0].tMs;
+  tEndMs = samples[samples.length-1].tMs;
+
+  pZero.fill(0); rZero.fill(0);
+  resetSmoothing();
+
+  scrubEl.disabled = false;
+  playBtn.disabled = false;
+  scrubEl.value = '0';
+  applySample(0, true);
+
+  log(`Loaded ${samples.length} samples (${((tEndMs-t0Ms)/1000).toFixed(1)} s).`);
+});
+
+playBtn.addEventListener('click', togglePlay);
+
+scrubEl.addEventListener('input', ()=>{
+  if (!samples.length) return;
+  stop();
+  const tNow = t0Ms + parseFloat(scrubEl.value) * (tEndMs - t0Ms);
+  idx = 0;
+  while (idx < samples.length-1 && samples[idx].tMs < tNow) idx++;
+  resetSmoothing();
+  applySample(idx, true);
+});
+
+// "Z" to zero at current frame (in oriented space)
+window.addEventListener('keydown', e=>{
+  if ((e.key === 'z' || e.key === 'Z') && samples.length){
+    const s = samples[idx];
+    for (let k=0;k<N;k++){
+      const {pVal, rVal} = orientedFromSample(s, k);
+      pZero[k] = pVal;
+      rZero[k] = rVal;
+    }
+    resetSmoothing();
+    applySample(idx, true);
+    log('Zero set at current frame.');
+  }
+});
+
+/*** draw baseline once ***/
+updateNumbers();
+updateDeform();
+</script>
+</body>
+</html>

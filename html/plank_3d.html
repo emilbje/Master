@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Plank 3D – WebSerial + Three.js</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  html,body{margin:0;height:100%;background:#0f1115;color:#eaeaea;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  #ui{position:fixed;top:10px;left:10px;background:#161a22cc;padding:12px 14px;border-radius:10px;backdrop-filter:blur(6px);z-index:10}
+  label{display:block;margin:8px 0 2px;font-size:12px;opacity:.9}
+  input[type=range]{width:240px}
+  button{padding:8px 12px;border-radius:8px;border:1px solid #2a2f3a;background:#1d2330;color:#eaeaea;cursor:pointer}
+  #status{font-size:12px;opacity:.85;margin-top:6px;min-height:1.2em;max-width:360px}
+  canvas{display:block}
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="ui">
+  <button id="connectBtn">Connect</button>
+  <div id="status">Booting…</div>
+  <label>Bend scale (×): <span id="bendVal">10</span></label>
+  <input id="bendScale" type="range" min="1" max="50" step="1" value="10"/>
+  <label>Torsion scale (×): <span id="torsVal">10</span></label>
+  <input id="torsScale" type="range" min="1" max="50" step="1" value="10"/>
+  <label>Smoothing (samples): <span id="smoothVal">5</span></label>
+  <input id="smoothN" type="range" min="1" max="20" step="1" value="5"/>
+  <div style="font-size:12px;opacity:.8;margin-top:6px">
+    Press <b>Z</b> to zero (sends 'z' to Arduino)
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+/*** LOGGING ***/
+const statusEl = document.getElementById('status');
+const log = (m)=>{ console.log(m); statusEl.textContent = m; };
+
+/*** CONFIG (SI units) ***/
+const L_M = 1.00;                  // total length
+const HALF_W = 0.03;               // half-width (X, i.e. 100 mm wide plank)
+const THICK = 0.005;                // thickness (Y), 20 mm – adjust as you like
+const SEGMENTS = 140;              // piecewise linear resolution
+// IMU positions along the length in meters (absolute 0..L); we center later
+const X_POS_M = [0.025, 0.26, 0.64, 0.815, 0.965];
+
+/*** THREE SETUP ***/
+let renderer, scene, camera, controls;
+let spine, zList, zListCentered;
+let initialized = false;
+
+// Solid plank = instanced boxes (one per segment)
+let plankInst; // THREE.InstancedMesh
+const tmpObj = new THREE.Object3D();
+
+function init3D(){
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  document.body.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0f1115);
+
+  camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.01, 100);
+  camera.position.set(1.1, 0.5, 2.2);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0,0,0); // look at center (plank centered)
+  controls.update();
+
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x222233, 0.8); scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, .7); dir.position.set(1,2,1); scene.add(dir);
+
+  // Floor grid in XZ (origin centered)
+  const grid = new THREE.GridHelper(4, 40, 0x334, 0x223);
+  scene.add(grid);
+
+  scene.add(new THREE.AxesHelper(0.25));
+
+  // Precompute z samples: centered –L/2..+L/2
+  zList = Array.from({length: SEGMENTS+1}, (_,i)=> (i/SEGMENTS)*L_M);
+  zListCentered = zList.map(z => z - L_M/2);
+
+  // Center IMU positions as well
+  for (let i=0;i<X_POS_M.length;i++) X_POS_M[i] = X_POS_M[i] - L_M/2;
+
+  // Solid light grey material
+  const mat = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.1, roughness: 0.6 });
+
+  // Base unit segment (depth=1), we scale Z per instance to dz
+  const baseGeom = new THREE.BoxGeometry(2*HALF_W, THICK, 1, 1, 1, 1);
+  plankInst = new THREE.InstancedMesh(baseGeom, mat, SEGMENTS);
+  plankInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(plankInst);
+
+  // “spine” (midline) for reference
+  const spineGeom = new THREE.BufferGeometry();
+  spineGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array((SEGMENTS+1)*3), 3));
+  spine = new THREE.Line(spineGeom, new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity: 0.85 }));
+  scene.add(spine);
+
+  initialized = true;
+
+  window.addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  (function loop(){
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  })();
+
+  log('Ready. Click Connect to choose COM port.');
+}
+init3D();
+
+/*** UI ***/
+const bendScaleEl= document.getElementById('bendScale');
+const torsScaleEl= document.getElementById('torsScale');
+const smoothEl   = document.getElementById('smoothN');
+const bendValEl  = document.getElementById('bendVal');
+const torsValEl  = document.getElementById('torsVal');
+const connectBtn = document.getElementById('connectBtn');
+bendScaleEl.oninput = ()=> bendValEl.textContent = bendScaleEl.value;
+torsScaleEl.oninput = ()=> torsValEl.textContent = torsScaleEl.value;
+smoothEl.oninput    = ()=> document.getElementById('smoothVal').textContent = smoothEl.value;
+
+/*** DATA BUFFERS ***/
+const N = 5;
+let pitch = new Array(N).fill(0.0); // deg
+let roll  = new Array(N).fill(0.0); // deg
+const pBuf = Array.from({length:N}, ()=>[]);
+const rBuf = Array.from({length:N}, ()=>[]);
+function pushAvg(bufs,i,v,maxN){ const a=bufs[i]; a.push(v); if(a.length>maxN) a.shift(); return a.reduce((s,x)=>s+x,0)/a.length; }
+
+function lerp(a,b,t){return a+(b-a)*t;}
+function interp1d(xS, vS, xq){
+  const out = new Array(xq.length);
+  for(let i=0;i<xq.length;i++){
+    const x = xq[i];
+    if (x <= xS[0]) { out[i]=vS[0]; continue; }
+    const last = xS.length-1;
+    if (x >= xS[last]){ out[i]=vS[last]; continue; }
+    let k=0; while(!(xS[k] <= x && x <= xS[k+1])) k++;
+    const t = (x - xS[k])/(xS[k+1]-xS[k]);
+    out[i] = lerp(vS[k], vS[k+1], t);
+  }
+  return out;
+}
+
+function updateDeform(){
+  if (!initialized) return;
+
+  const bendK = parseFloat(bendScaleEl.value);
+  const torsK = parseFloat(torsScaleEl.value);
+
+  const pitches = interp1d(X_POS_M, pitch, zListCentered);
+  const rolls   = interp1d(X_POS_M, roll,  zListCentered);
+
+  // Integrate small-angle slope → Y(z)
+  const y = new Array(zList.length).fill(0);
+  for(let i=1;i<zList.length;i++){
+    const dz = zList[i] - zList[i-1];
+    const th = 0.5*(pitches[i-1]+pitches[i]) * Math.PI/180;
+    y[i] = y[i-1] + th*dz;
+  }
+  // Remove linear tilt
+  const z0 = zListCentered[0], zN = zListCentered[zListCentered.length-1];
+  const m = (y[y.length-1]-y[0])/(zN - z0);
+  for(let i=0;i<y.length;i++) y[i] -= (m*(zListCentered[i]-z0)+y[0]);
+
+  // Update spine (centerline)
+  const sp = spine.geometry.attributes.position.array;
+  for (let i=0;i<=SEGMENTS;i++){
+    const k = i*3;
+    sp[k+0] = 0;
+    sp[k+1] = y[i]*bendK;
+    sp[k+2] = zListCentered[i];
+  }
+  spine.geometry.attributes.position.needsUpdate = true;
+
+  // Update instanced solid segments
+  for (let i=1;i<=SEGMENTS;i++){
+    const zA = zListCentered[i-1], zB = zListCentered[i];
+    const dz = zB - zA;
+
+    const yA = y[i-1]*bendK, yB = y[i]*bendK;
+    const yC = 0.5*(yA+yB);               // segment center height
+    const zC = 0.5*(zA+zB);               // segment center z
+
+    const th = 0.5*(pitches[i-1]+pitches[i]) * Math.PI/180; // local bend angle around X
+    const rr = -0.5*(rolls[i-1]+rolls[i]) * Math.PI/180;     // torsion around Z
+
+    tmpObj.position.set(0, yC, zC);
+    // rotation order: torsion (Z) then bend slope (X)
+    tmpObj.rotation.set(th, 0, rr);
+    // scale depth to segment length
+    tmpObj.scale.set(1, 1, dz);
+    tmpObj.updateMatrix();
+    plankInst.setMatrixAt(i-1, tmpObj.matrix);
+  }
+  plankInst.instanceMatrix.needsUpdate = true;
+}
+
+/*** WEB SERIAL ***/
+let port, reader, buf = "";
+const re = /(p0|p1|p2|p3|p4|r0|r1|r2|r3|r4)\s*:\s*(-?\d+(?:\.\d+)?)/g;
+
+async function connect(){
+  try{
+    if (!('serial' in navigator)) { log('WebSerial not supported (use Chrome/Edge via localhost/https)'); return; }
+    log('Opening port…');
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    log('Connected. Reading…');
+
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    reader = textDecoder.readable.getReader();
+    readLoop();
+  }catch(e){
+    console.error(e);
+    log(`Connect failed: ${e.name||''} ${e.message||''}`.trim());
+  }
+}
+document.getElementById('connectBtn').addEventListener('click', connect);
+
+// send 'z' to Arduino
+window.addEventListener('keydown', async e=>{
+  if((e.key==='z' || e.key==='Z') && port?.writable){
+    const w = port.writable.getWriter();
+    await w.write(new TextEncoder().encode('z\n'));
+    w.releaseLock();
+    buf = "";
+    log("Sent 'z'");
+  }
+});
+
+async function readLoop(){
+  try{
+    while(true){
+      const {value, done} = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      buf += value;
+      let lastNL = Math.max(buf.lastIndexOf("\n"), buf.lastIndexOf("\r"));
+      if (lastNL < 0) continue;
+
+      const head = buf.slice(0, lastNL);
+      buf = buf.slice(lastNL+1);
+      const lines = head.split(/\r?\n/).filter(s=>s.trim().length);
+      if (!lines.length) continue;
+
+      const s = lines[lines.length-1];
+
+      const vals = {};
+      re.lastIndex = 0;
+      let m;
+      while((m = re.exec(s)) !== null){ vals[m[1]] = parseFloat(m[2]); }
+
+      let ok=true;
+      for (let i=0;i<5;i++){ if(!(('p'+i) in vals) || !(('r'+i) in vals)) ok=false; }
+      if (!ok) { console.warn('Bad line:', s); continue; }
+
+      const nSmooth = parseInt(smoothEl.value,10);
+      for(let i=0;i<5;i++){
+        pitch[i] = pushAvg(pBuf, i, vals['p'+i], nSmooth);
+        roll[i]  = pushAvg(rBuf,  i, vals['r'+i], nSmooth);
+      }
+      updateDeform();
+    }
+  }catch(e){
+    console.error('readLoop error:', e);
+    log('Read error: '+(e.message||e.name));
+  }finally{
+    try { reader?.releaseLock(); } catch {}
+  }
+}
+</script>
+</body>
+</html>
+

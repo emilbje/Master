@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>5x4 repetisjonstester</title>
+<style>
+  :root{
+    --bg:#f3f5f1;
+    --panel:#ffffff;
+    --line:#d5dbd4;
+    --text:#18201d;
+    --muted:#5d675f;
+    --accent:#245f8f;
+    --accent-soft:#e5eef6;
+    --green:#25714d;
+    --orange:#a25b18;
+    --red:#a9322a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text)}
+  .wrap{max-width:1800px;margin:0 auto;padding:18px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:14px}
+  h1{margin:0;font-size:24px;letter-spacing:0}
+  h2{margin:0 0 10px;font-size:16px;letter-spacing:0}
+  h3{margin:0;font-size:15px;letter-spacing:0}
+  .panel,.controls{background:var(--panel);border:1px solid var(--line);border-radius:8px}
+  .controls{padding:14px;margin-bottom:14px}
+  .toolbar{display:grid;grid-template-columns:1.2fr auto auto auto;gap:12px;align-items:end}
+  .field{display:grid;gap:6px}
+  .field label,.toggle-label{font-size:12px;font-weight:700;color:var(--muted)}
+  select,input[type="file"],button{width:100%;min-height:38px;border:1px solid var(--line);border-radius:6px;background:#fff;font:inherit;padding:8px 10px}
+  button{background:var(--accent);border-color:var(--accent);color:#fff;cursor:pointer;font-weight:700}
+  button.secondary{background:#eef1ee;color:var(--text);border-color:var(--line)}
+  button:hover{filter:brightness(.97)}
+  .toggle-row{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+  .toggle-row label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--text)}
+  .upload-grid{display:grid;grid-template-columns:repeat(4,minmax(250px,1fr));gap:12px}
+  .upload-card{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff}
+  .upload-card .meta{margin:4px 0 10px;color:var(--muted);font-size:12px;min-height:16px}
+  .file-list{display:grid;gap:8px}
+  .file-row{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center}
+  .file-row span{font-size:12px;font-weight:700;color:var(--muted)}
+  .file-row input{font-size:12px}
+  .plot-grid{display:grid;grid-template-columns:repeat(4,minmax(300px,1fr));gap:12px}
+  .plot-card{padding:12px}
+  .plot-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:6px}
+  .meta{color:var(--muted);font-size:12px;min-height:18px;overflow-wrap:anywhere}
+  canvas{width:100%;height:440px;display:block;background:#fff;border:1px solid #edf0ed;border-radius:6px}
+  .legend{display:flex;flex-wrap:wrap;gap:8px 12px;margin-top:8px;max-height:96px;overflow:auto}
+  .legend-item{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text);white-space:nowrap}
+  .swatch{width:18px;height:4px;border-radius:4px;display:inline-block}
+  .pill{display:inline-flex;align-items:center;min-height:28px;padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:#fff;color:var(--muted);font-size:13px;font-weight:700}
+  .summary{display:flex;gap:8px;flex-wrap:wrap}
+  @media (max-width: 1350px){
+    .plot-grid,.upload-grid{grid-template-columns:repeat(2,minmax(280px,1fr))}
+  }
+  @media (max-width: 820px){
+    .wrap{padding:12px}
+    header{align-items:flex-start;flex-direction:column}
+    .toolbar,.plot-grid,.upload-grid{grid-template-columns:1fr}
+    canvas{height:400px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>5x4 repetisjonstester</h1>
+    <div class="summary">
+      <span class="pill" id="loadedCount">0 / 20 filer</span>
+      <span class="pill" id="pointCount">0 punkt</span>
+    </div>
+  </header>
+
+  <section class="controls">
+    <div class="toolbar">
+      <div class="field">
+        <label for="plotMode">Plott</label>
+        <select id="plotMode">
+          <option value="forceDeflection">x: Kraft (kg), y: Nedb&oslash;yning (mm)</option>
+          <option value="deflectionImu">x: Nedb&oslash;yning (mm), y: IMU pitch</option>
+          <option value="forceImu">x: Kraft (kg), y: IMU pitch</option>
+          <option value="forceDiff24">x: Kraft (kg), y: |IMU 2 - IMU 4|</option>
+        </select>
+      </div>
+      <button class="secondary" id="selectAllImu" type="button">Alle IMU</button>
+      <button class="secondary" id="selectNoImu" type="button">Ingen IMU</button>
+      <button id="redrawBtn" type="button">Oppdater</button>
+    </div>
+
+    <div class="toggle-row" id="imuBox">
+      <span class="toggle-label">IMU</span>
+      <label><input type="checkbox" value="0"> 0</label>
+      <label><input type="checkbox" value="1"> 1</label>
+      <label><input type="checkbox" value="2" checked> 2</label>
+      <label><input type="checkbox" value="3"> 3</label>
+      <label><input type="checkbox" value="4" checked> 4</label>
+      <label><input type="checkbox" value="5"> 5</label>
+      <label><input type="checkbox" value="6"> 6</label>
+      <label><input type="checkbox" value="7"> 7</label>
+    </div>
+
+    <div class="toggle-row" id="repeatBox">
+      <span class="toggle-label">Repetisjon</span>
+      <label><input type="checkbox" value="0" checked> R1</label>
+      <label><input type="checkbox" value="1" checked> R2</label>
+      <label><input type="checkbox" value="2" checked> R3</label>
+      <label><input type="checkbox" value="3" checked> R4</label>
+      <label><input type="checkbox" value="4" checked> R5</label>
+      <label><input id="sharedAxes" type="checkbox" checked> Felles akser</label>
+      <label><input id="absDeflection" type="checkbox" checked> Positiv nedb&oslash;yning</label>
+      <label><input id="showPoints" type="checkbox"> Punkt</label>
+    </div>
+  </section>
+
+  <section class="controls">
+    <div class="upload-grid" id="uploadGrid"></div>
+  </section>
+
+  <div class="plot-grid" id="plotGrid"></div>
+</div>
+
+<script>
+const POSITIONS = [
+  { id:'front', title:'Foran p\u00e5 bindingen' },
+  { id:'middle', title:'Midt p\u00e5 bindingen' },
+  { id:'back', title:'Bak p\u00e5 bindingen' },
+  { id:'balance140', title:'140 mm bak balansepunkt' }
+];
+const REPEAT_COUNT = 5;
+const REP_COLORS = ['#245f8f','#d1532f','#25714d','#7b4da3','#b28316'];
+const IMU_COLORS = ['#1f77b4','#d62728','#2ca02c','#9467bd','#ff7f0e','#17becf','#8c564b','#e377c2'];
+const DASHES = [[],[8,4],[3,4],[10,4,2,4],[2,3,8,3]];
+const datasets = POSITIONS.map(() => Array(REPEAT_COUNT).fill(null));
+
+const uploadGrid = document.getElementById('uploadGrid');
+const plotGrid = document.getElementById('plotGrid');
+const plotMode = document.getElementById('plotMode');
+const imuBox = document.getElementById('imuBox');
+const repeatBox = document.getElementById('repeatBox');
+const sharedAxes = document.getElementById('sharedAxes');
+const absDeflection = document.getElementById('absDeflection');
+const showPoints = document.getElementById('showPoints');
+const loadedCount = document.getElementById('loadedCount');
+const pointCount = document.getElementById('pointCount');
+
+createUploadGrid();
+createPlotGrid();
+wireControls();
+renderAll();
+
+function createUploadGrid(){
+  POSITIONS.forEach((position, positionIndex) => {
+    const card = document.createElement('div');
+    card.className = 'upload-card';
+    card.innerHTML = `<h3>${position.title}</h3><div class="meta" id="uploadMeta-${position.id}">0 / ${REPEAT_COUNT} filer</div><div class="file-list"></div>`;
+    const list = card.querySelector('.file-list');
+
+    for(let repeatIndex = 0; repeatIndex < REPEAT_COUNT; repeatIndex++){
+      const row = document.createElement('label');
+      row.className = 'file-row';
+      row.innerHTML = `<span>R${repeatIndex + 1}</span><input type="file" accept=".csv,.txt" data-position="${positionIndex}" data-repeat="${repeatIndex}">`;
+      const input = row.querySelector('input');
+      input.addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        datasets[positionIndex][repeatIndex] = file ? await loadLabFile(file, repeatIndex) : null;
+        renderAll();
+      });
+      list.appendChild(row);
+    }
+
+    uploadGrid.appendChild(card);
+  });
+}
+
+function createPlotGrid(){
+  POSITIONS.forEach((position) => {
+    const card = document.createElement('section');
+    card.className = 'panel plot-card';
+    card.innerHTML = `
+      <div class="plot-title">
+        <h2>${position.title}</h2>
+      </div>
+      <div class="meta" id="meta-${position.id}">Ingen filer lastet inn.</div>
+      <canvas id="canvas-${position.id}" width="640" height="440"></canvas>
+      <div class="legend" id="legend-${position.id}"></div>
+    `;
+    plotGrid.appendChild(card);
+  });
+}
+
+function wireControls(){
+  plotMode.addEventListener('change', renderAll);
+  imuBox.addEventListener('change', renderAll);
+  repeatBox.addEventListener('change', renderAll);
+  sharedAxes.addEventListener('change', renderAll);
+  absDeflection.addEventListener('change', renderAll);
+  showPoints.addEventListener('change', renderAll);
+  document.getElementById('redrawBtn').addEventListener('click', renderAll);
+  document.getElementById('selectAllImu').addEventListener('click', () => {
+    imuBox.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = true; });
+    renderAll();
+  });
+  document.getElementById('selectNoImu').addEventListener('click', () => {
+    imuBox.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = false; });
+    renderAll();
+  });
+  window.addEventListener('resize', renderAll);
+}
+
+async function loadLabFile(file, repeatIndex){
+  const text = await file.text();
+  const rows = parseLabCsv(text);
+  return { name:file.name, rows, repeatIndex, totalRows:rows.length };
+}
+
+function parseLabCsv(text){
+  const lines = text.replace(/\r/g,'').split('\n').map(line => line.trim()).filter(Boolean);
+  const rows = [];
+
+  for(const line of lines){
+    let parts;
+    if(line.includes(';')) parts = line.split(';');
+    else if(line.includes('\t')) parts = line.split('\t');
+    else parts = line.split(',');
+
+    if(parts.length < 10) continue;
+    const nums = parts.slice(0, 10).map(parseCellNumber);
+    if(nums.every(v => v === null)) continue;
+    if(nums.some(v => v !== null && !Number.isFinite(v))) continue;
+    rows.push({ force:nums[0], deflection:nums[1], imu:nums.slice(2, 10) });
+  }
+
+  return rows;
+}
+
+function parseCellNumber(value){
+  const cleaned = String(value).trim();
+  if(cleaned === '') return null;
+  const normalized = cleaned.replace(',', '.');
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : NaN;
+}
+
+function selectedImus(){
+  return [...imuBox.querySelectorAll('input[type="checkbox"]:checked')].map(input => Number(input.value));
+}
+
+function selectedRepeats(){
+  return [...repeatBox.querySelectorAll('input[type="checkbox"]:checked')]
+    .filter(input => input.id !== 'sharedAxes' && input.id !== 'absDeflection' && input.id !== 'showPoints')
+    .map(input => Number(input.value));
+}
+
+function deflectionValue(row){
+  if(!isFiniteNumber(row.deflection)) return NaN;
+  return absDeflection.checked ? Math.abs(row.deflection) : row.deflection;
+}
+
+function buildSeriesForPosition(positionIndex){
+  const mode = plotMode.value;
+  const selectedRepeatSet = new Set(selectedRepeats());
+  const selectedImuList = selectedImus();
+  const loaded = datasets[positionIndex].filter(Boolean);
+  const activeDatasets = datasets[positionIndex].filter(dataset => dataset && selectedRepeatSet.has(dataset.repeatIndex));
+  const series = [];
+
+  for(const dataset of activeDatasets){
+    const repNo = dataset.repeatIndex + 1;
+
+    if(mode === 'forceDeflection'){
+      series.push({
+        name:`R${repNo}`,
+        color:REP_COLORS[dataset.repeatIndex],
+        dash:DASHES[dataset.repeatIndex],
+        points:dataset.rows
+          .filter(row => isFiniteNumber(row.force) && isFiniteNumber(deflectionValue(row)))
+          .map(row => ({ x:row.force, y:deflectionValue(row) }))
+      });
+      continue;
+    }
+
+    if(mode === 'forceDiff24'){
+      series.push({
+        name:`R${repNo} |IMU2-IMU4|`,
+        color:REP_COLORS[dataset.repeatIndex],
+        dash:DASHES[dataset.repeatIndex],
+        points:dataset.rows
+          .filter(row => isFiniteNumber(row.force) && isFiniteNumber(row.imu[2]) && isFiniteNumber(row.imu[4]))
+          .map(row => ({ x:row.force, y:Math.abs(row.imu[2] - row.imu[4]) }))
+      });
+      continue;
+    }
+
+    for(const imuIndex of selectedImuList){
+      series.push({
+        name:`R${repNo} IMU${imuIndex}`,
+        color:IMU_COLORS[imuIndex % IMU_COLORS.length],
+        dash:DASHES[dataset.repeatIndex],
+        points:dataset.rows
+          .filter(row => {
+            const x = mode === 'deflectionImu' ? deflectionValue(row) : row.force;
+            return isFiniteNumber(x) && isFiniteNumber(row.imu[imuIndex]);
+          })
+          .map(row => ({ x:mode === 'deflectionImu' ? deflectionValue(row) : row.force, y:row.imu[imuIndex] }))
+      });
+    }
+  }
+
+  return {
+    series:series.filter(item => item.points.length > 0),
+    loadedCount:loaded.length,
+    rowsRead:loaded.reduce((sum, dataset) => sum + dataset.totalRows, 0),
+    xLabel:getXLabel(mode),
+    yLabel:getYLabel(mode),
+  };
+}
+
+function getXLabel(mode){
+  if(mode === 'deflectionImu') return 'Nedb\u00f8yning (mm)';
+  return 'Kraft (kg)';
+}
+
+function getYLabel(mode){
+  if(mode === 'forceDeflection') return 'Nedb\u00f8yning (mm)';
+  if(mode === 'forceDiff24') return '|IMU 2 - IMU 4|';
+  return 'IMU pitch';
+}
+
+function renderAll(){
+  const builtByPosition = POSITIONS.map((_, index) => buildSeriesForPosition(index));
+  const sharedAxis = sharedAxes.checked ? computeAxis(builtByPosition.flatMap(item => item.series)) : null;
+  let totalFiles = 0;
+  let totalRows = 0;
+  let totalPoints = 0;
+
+  POSITIONS.forEach((position, index) => {
+    const built = builtByPosition[index];
+    totalFiles += built.loadedCount;
+    totalRows += built.rowsRead;
+    totalPoints += built.series.reduce((sum, item) => sum + item.points.length, 0);
+    renderPosition(position, built, sharedAxis);
+    document.getElementById(`uploadMeta-${position.id}`).textContent = `${built.loadedCount} / ${REPEAT_COUNT} filer`;
+  });
+
+  loadedCount.textContent = `${totalFiles} / ${POSITIONS.length * REPEAT_COUNT} filer`;
+  pointCount.textContent = `${totalRows} rader, ${totalPoints} punkt`;
+}
+
+function renderPosition(position, built, sharedAxis){
+  const canvas = document.getElementById(`canvas-${position.id}`);
+  const legend = document.getElementById(`legend-${position.id}`);
+  const meta = document.getElementById(`meta-${position.id}`);
+  const ctx = canvas.getContext('2d');
+  fitCanvasToDisplay(canvas);
+  clearCanvas(ctx, canvas);
+
+  if(built.loadedCount === 0){
+    meta.textContent = 'Ingen filer lastet inn.';
+    legend.innerHTML = '';
+    drawCenteredMessage(ctx, canvas, 'Last inn CSV-filer');
+    return;
+  }
+
+  const pointsUsed = built.series.reduce((sum, item) => sum + item.points.length, 0);
+  meta.textContent = `${built.loadedCount} filer · ${built.rowsRead} rader · ${built.series.length} kurver · ${pointsUsed} punkt`;
+  drawChart(ctx, canvas, built.series, built.xLabel, built.yLabel, sharedAxis);
+  drawLegend(legend, built.series);
+}
+
+function fitCanvasToDisplay(canvas){
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.round(rect.width * ratio));
+  const height = Math.max(280, Math.round(rect.height * ratio));
+  if(canvas.width !== width || canvas.height !== height){
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+
+function clearCanvas(ctx, canvas){
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function drawCenteredMessage(ctx, canvas, text){
+  ctx.save();
+  ctx.fillStyle = '#5d675f';
+  ctx.font = `${Math.max(14, canvas.width * 0.018)}px Arial`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  ctx.restore();
+}
+
+function drawChart(ctx, canvas, series, xLabel, yLabel, sharedAxis){
+  const validSeries = series.filter(item => item.points.length > 0);
+  if(validSeries.length === 0){
+    drawCenteredMessage(ctx, canvas, 'Ingen gyldige datapunkter for valgt plott');
+    return;
+  }
+
+  const margin = {
+    left:Math.round(canvas.width * 0.13),
+    right:Math.round(canvas.width * 0.04),
+    top:Math.round(canvas.height * 0.07),
+    bottom:Math.round(canvas.height * 0.13)
+  };
+  const plot = {
+    x:margin.left,
+    y:margin.top,
+    w:canvas.width - margin.left - margin.right,
+    h:canvas.height - margin.top - margin.bottom
+  };
+
+  const axis = sharedAxis || computeAxis(validSeries);
+  const xMin = axis.xMin, xMax = axis.xMax, yMin = axis.yMin, yMax = axis.yMax;
+
+  ctx.save();
+  ctx.strokeStyle = '#d5dbd4';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#18201d';
+  ctx.font = `${Math.max(11, canvas.width * 0.012)}px Arial`;
+  drawGridAndTicks(ctx, plot, xMin, xMax, yMin, yMax);
+
+  ctx.strokeStyle = '#202925';
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(plot.x, plot.y + plot.h);
+  ctx.lineTo(plot.x + plot.w, plot.y + plot.h);
+  ctx.moveTo(plot.x, plot.y);
+  ctx.lineTo(plot.x, plot.y + plot.h);
+  ctx.stroke();
+
+  for(const item of validSeries){
+    const points = downsample(item.points, 1800);
+    ctx.save();
+    ctx.strokeStyle = item.color;
+    ctx.globalAlpha = plotMode.value === 'forceDeflection' || plotMode.value === 'forceDiff24' ? 0.88 : 0.76;
+    ctx.lineWidth = plotMode.value === 'forceDeflection' || plotMode.value === 'forceDiff24' ? 2.2 : 1.7;
+    ctx.setLineDash(item.dash || []);
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      const px = mapValue(point.x, xMin, xMax, plot.x, plot.x + plot.w);
+      const py = mapValue(point.y, yMin, yMax, plot.y + plot.h, plot.y);
+      if(index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    ctx.restore();
+
+    if(showPoints.checked && points.length <= 1200){
+      ctx.save();
+      ctx.fillStyle = item.color;
+      ctx.globalAlpha = 0.78;
+      for(const point of points){
+        const px = mapValue(point.x, xMin, xMax, plot.x, plot.x + plot.w);
+        const py = mapValue(point.y, yMin, yMax, plot.y + plot.h, plot.y);
+        ctx.beginPath();
+        ctx.arc(px, py, 2.1, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#18201d';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(xLabel, plot.x + plot.w / 2, canvas.height - Math.round(canvas.height * 0.035));
+  ctx.save();
+  ctx.translate(Math.round(canvas.width * 0.035), plot.y + plot.h / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillText(yLabel, 0, 0);
+  ctx.restore();
+  ctx.restore();
+}
+
+function computeAxis(series){
+  let count = 0;
+  let xMin = Infinity;
+  let xMax = -Infinity;
+  let yMin = Infinity;
+  let yMax = -Infinity;
+
+  for(const item of series){
+    for(const point of item.points){
+      if(!isFiniteNumber(point.x) || !isFiniteNumber(point.y)) continue;
+      count += 1;
+      if(point.x < xMin) xMin = point.x;
+      if(point.x > xMax) xMax = point.x;
+      if(point.y < yMin) yMin = point.y;
+      if(point.y > yMax) yMax = point.y;
+    }
+  }
+
+  if(count === 0) return { xMin:0, xMax:1, yMin:0, yMax:1 };
+  [xMin, xMax] = expandRange(xMin, xMax, 0.06);
+  [yMin, yMax] = expandRange(yMin, yMax, 0.08);
+  return { xMin, xMax, yMin, yMax };
+}
+
+function drawGridAndTicks(ctx, plot, xMin, xMax, yMin, yMax){
+  const xTicks = 5;
+  const yTicks = 6;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+
+  for(let i = 0; i <= xTicks; i++){
+    const t = i / xTicks;
+    const x = plot.x + t * plot.w;
+    const value = xMin + t * (xMax - xMin);
+    ctx.strokeStyle = '#edf0ed';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, plot.y);
+    ctx.lineTo(x, plot.y + plot.h);
+    ctx.stroke();
+    ctx.fillStyle = '#5d675f';
+    ctx.fillText(formatTick(value), x, plot.y + plot.h + 8);
+  }
+
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for(let i = 0; i <= yTicks; i++){
+    const t = i / yTicks;
+    const y = plot.y + plot.h - t * plot.h;
+    const value = yMin + t * (yMax - yMin);
+    ctx.strokeStyle = '#edf0ed';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(plot.x, y);
+    ctx.lineTo(plot.x + plot.w, y);
+    ctx.stroke();
+    ctx.fillStyle = '#5d675f';
+    ctx.fillText(formatTick(value), plot.x - 9, y);
+  }
+}
+
+function drawLegend(element, series){
+  element.innerHTML = '';
+  const seen = new Set();
+  const mode = plotMode.value;
+
+  if(mode === 'deflectionImu' || mode === 'forceImu'){
+    for(const imuIndex of selectedImus()){
+      const key = `imu-${imuIndex}`;
+      seen.add(key);
+      element.appendChild(makeLegendItem(`IMU ${imuIndex}`, IMU_COLORS[imuIndex % IMU_COLORS.length]));
+    }
+    for(const repeatIndex of selectedRepeats()){
+      element.appendChild(makeLegendItem(`R${repeatIndex + 1}`, '#1f2522', DASHES[repeatIndex]));
+    }
+    return;
+  }
+
+  for(const item of series){
+    const key = item.name;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    element.appendChild(makeLegendItem(item.name, item.color, item.dash));
+  }
+}
+
+function makeLegendItem(text, color, dash){
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  const swatch = document.createElement('span');
+  swatch.className = 'swatch';
+  swatch.style.background = dashedCss(color, dash);
+  const label = document.createElement('span');
+  label.textContent = text;
+  item.appendChild(swatch);
+  item.appendChild(label);
+  return item;
+}
+
+function dashedCss(color, dash){
+  if(!dash || dash.length === 0) return color;
+  return `repeating-linear-gradient(90deg, ${color} 0 8px, transparent 8px 13px)`;
+}
+
+function downsample(points, maxPoints){
+  if(points.length <= maxPoints) return points;
+  const step = Math.ceil(points.length / maxPoints);
+  const sampled = [];
+  for(let i = 0; i < points.length; i += step) sampled.push(points[i]);
+  const last = points[points.length - 1];
+  if(sampled[sampled.length - 1] !== last) sampled.push(last);
+  return sampled;
+}
+
+function expandRange(min, max, padFraction){
+  if(!isFiniteNumber(min) || !isFiniteNumber(max)) return [0, 1];
+  if(min === max){
+    const pad = Math.abs(min || 1) * 0.1 + 1;
+    return [min - pad, max + pad];
+  }
+  const span = max - min;
+  const pad = span * padFraction;
+  return [min - pad, max + pad];
+}
+
+function mapValue(value, inMin, inMax, outMin, outMax){
+  const t = (value - inMin) / (inMax - inMin || 1);
+  return outMin + t * (outMax - outMin);
+}
+
+function formatTick(value){
+  const abs = Math.abs(value);
+  if(abs >= 100) return value.toFixed(0);
+  if(abs >= 10) return value.toFixed(1);
+  return value.toFixed(2);
+}
+
+function isFiniteNumber(value){
+  return typeof value === 'number' && Number.isFinite(value);
+}
+</script>
+</body>
+</html>

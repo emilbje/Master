@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>XC Ski 3D – Offline log player + synced video (video-master)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#0f1420;
+    --panel:rgba(255,255,255,.92);
+    --text:#0b0d12;
+    --muted:rgba(0,0,0,.65);
+  }
+  html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  canvas{display:block}
+
+  /* Top bar (compact) */
+  #uiBar{
+    position:fixed; top:8px; left:8px; right:8px;
+    background:var(--panel);
+    color:var(--text);
+    padding:6px 8px;
+    border-radius:10px;
+    backdrop-filter:blur(8px);
+    z-index:10;
+    border:1px solid rgba(0,0,0,.10);
+    box-shadow:0 10px 30px rgba(0,0,0,.18);
+    display:flex;
+    gap:10px;
+    align-items:center;
+    flex-wrap:wrap;
+  }
+  .group{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  .stack{display:flex; flex-direction:column; gap:2px}
+  .labelRow{display:flex; gap:6px; align-items:baseline; white-space:nowrap}
+  label{font-size:10px; color:var(--muted)}
+  .val{font-size:10px; color:var(--text)}
+  input[type=range]{width:180px}
+  input[type=number], input[type=text]{width:110px; padding:3px 6px; border-radius:9px; border:1px solid rgba(0,0,0,.18); font-size:11px}
+  #posScrub{width:420px; max-width:min(560px,60vw)}
+  button{
+    padding:4px 8px;border-radius:9px;border:1px solid rgba(0,0,0,.18);
+    background:#f3f4f6;color:var(--text);cursor:pointer;font-size:11px
+  }
+  button:hover{filter:brightness(.98)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  #status{font-size:10px; color:rgba(0,0,0,.8); min-width:180px}
+
+  /* Main split */
+  #main{
+    position:absolute; left:0; right:0; bottom:0;
+    top:64px; /* adjusted in JS */
+    display:flex;
+    gap:10px;
+    padding:10px;
+    box-sizing:border-box;
+  }
+  #leftPane, #rightPane{
+    flex:1;
+    border-radius:14px;
+    overflow:hidden;
+    background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.08);
+    position:relative;
+  }
+  #threeHost{position:absolute; inset:0;}
+  #videoHost{position:absolute; inset:0; display:flex; flex-direction:column;}
+  #videoEl{
+    width:100%; height:100%;
+    background:#000;
+  }
+  #videoNote{
+    position:absolute; left:10px; bottom:10px;
+    background:rgba(0,0,0,.55); color:#fff;
+    padding:6px 8px; border-radius:10px;
+    font-size:12px;
+    pointer-events:none;
+  }
+
+  /* HUD roll/pitch in 3D pane */
+  #hudRP{
+    position:absolute;
+    top:10px; left:10px;
+    z-index:5;
+    background:rgba(255,255,255,.85);
+    border:1px solid rgba(0,0,0,.12);
+    border-radius:10px;
+    padding:6px 7px;
+    backdrop-filter:blur(6px);
+    pointer-events:none;
+  }
+  #rpTable{border-collapse:collapse;font-size:10px}
+  #rpTable th,#rpTable td{padding:1px 4px;border-bottom:1px solid rgba(0,0,0,.10);text-align:right}
+  #rpTable th:first-child,#rpTable td:first-child{text-align:left}
+  #rpTable thead th{opacity:.75;font-weight:600}
+  #hudHint{margin-top:4px;font-size:10px;opacity:.7}
+</style>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+
+<body>
+
+<div id="uiBar">
+  <div class="group">
+    <button id="loadBtn">Load log</button>
+    <button id="loadVidBtn">Load video</button>
+    <button id="playBtn" disabled>Play</button>
+    <div id="status">Booting…</div>
+  </div>
+
+  <div class="group">
+    <div class="stack">
+      <div class="labelRow"><label>Position</label><span class="val"><span id="tVal">0.00</span> s</span></div>
+      <input id="posScrub" type="range" min="0" max="1" step="0.001" value="0" disabled />
+    </div>
+
+    <div class="stack">
+      <div class="labelRow"><label>Vid offset</label><span class="val"><span id="vidOffVal">0.00</span> s</span></div>
+      <!-- Use text input so users can type '-' and '.' regardless of locale/browser number-input quirks -->
+      <input id="vidOffset" type="text" value="0" inputmode="decimal" autocomplete="off" />
+      <label style="margin-top:-2px">(+ = video later than log)</label>
+    </div>
+
+    <!-- Speed control (applies to BOTH log + video) -->
+    <div class="stack">
+      <div class="labelRow"><label>Speed</label><span class="val"><span id="spdVal">1.00</span>x</span></div>
+      <input id="playSpeed" type="text" value="1" inputmode="decimal" autocomplete="off" />
+      <label style="margin-top:-2px">0.25x–4x (log + video)</label>
+    </div>
+  </div>
+
+  <input id="fileInput" type="file" accept=".txt,.csv,.tsv" style="display:none" />
+  <input id="vidInput" type="file" accept="video/mp4,video/*" style="display:none" />
+</div>
+
+<div id="main">
+  <div id="leftPane">
+    <div id="threeHost"></div>
+
+    <div id="hudRP">
+      <table id="rpTable">
+        <thead><tr><th>IMU</th><th>R</th><th>P</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td><span id="rNum0">0.0</span></td><td><span id="pNum0">0.0</span></td></tr>
+          <tr><td>1</td><td><span id="rNum1">0.0</span></td><td><span id="pNum1">0.0</span></td></tr>
+          <tr><td>2</td><td><span id="rNum2">0.0</span></td><td><span id="pNum2">0.0</span></td></tr>
+          <tr><td>3</td><td><span id="rNum3">0.0</span></td><td><span id="pNum3">0.0</span></td></tr>
+          <tr><td>4</td><td><span id="rNum4">0.0</span></td><td><span id="pNum4">0.0</span></td></tr>
+          <tr><td>5</td><td><span id="rNum5">0.0</span></td><td><span id="pNum5">0.0</span></td></tr>
+          <tr><td>6</td><td><span id="rNum6">0.0</span></td><td><span id="pNum6">0.0</span></td></tr>
+          <tr><td>7</td><td><span id="rNum7">0.0</span></td><td><span id="pNum7">0.0</span></td></tr>
+          <tr><td><b>M</b></td><td><span id="rMean">0.0</span></td><td><span id="pMean">0.0</span></td></tr>
+        </tbody>
+      </table>
+      <div id="hudHint">Z = zero</div>
+    </div>
+  </div>
+
+  <div id="rightPane">
+    <div id="videoHost">
+      <video id="videoEl" controls playsinline preload="auto"></video>
+      <div id="videoNote">Load an mp4 to sync with the log</div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+
+/*** LOGGING ***/
+const statusEl = document.getElementById('status');
+const log = (m)=>{ console.log(m); statusEl.textContent = m; };
+
+/*** LAYOUT ***/
+const uiBar = document.getElementById('uiBar');
+const main = document.getElementById('main');
+function layout(){
+  const h = uiBar.getBoundingClientRect().height;
+  main.style.top = (8 + h + 8) + 'px';
+  resize3D();
+}
+window.addEventListener('resize', layout);
+
+/*** FIXED VIZ GAINS (sliders removed) ***/
+const BEND_GAIN = 1.0;
+const TORS_GAIN = 1.0;
+
+/*** SPEC (meters) ***/
+const L_M        = 1.87;
+const BASE_W     = 0.045;
+const HALF_W     = BASE_W/2;
+
+const T_CENTER   = 0.028;
+const T_END      = 0.002;
+
+const TIP_LEN    = 0.10;
+const ROCKER_MAX = 0.030;
+const SEGMENTS   = 1870;
+
+const CONTACT_FRONT_FROM_TIP = 0.16;
+const CONTACT_BACK_FROM_TIP  = 1.78;
+
+const CLAMP_NO_PENETRATION = true;
+const TOP_SLOPE_COMP = 1.0;
+
+const IMU_POS_ABS = [
+  L_M - 1.752, // imu0
+  L_M - 1.587, // imu1
+  L_M - 1.357, // imu2
+  L_M - 0.855, // imu3
+  L_M - 0.675, // imu4
+  L_M - 0.485, // imu5
+  L_M - 0.283, // imu6
+  L_M - 0.121  // imu7
+];
+
+const IMU_L = 0.037;
+const IMU_W = 0.027;
+const IMU_H = 0.009;
+const IMU_LIFT = 0.001;
+
+/*** THREE ***/
+let renderer, scene, camera, controls;
+let spine, zList, zListCentered, imuPosCentered, skiInst;
+let imuMarkers, imuIdx;
+const tmpObj = new THREE.Object3D();
+const upY  = new THREE.Vector3(0,1,0);
+const xDir = new THREE.Vector3();
+const yDir = new THREE.Vector3();
+const zDir = new THREE.Vector3();
+const basisM = new THREE.Matrix4();
+const qBasis = new THREE.Quaternion();
+const qRoll = new THREE.Quaternion();
+const offV = new THREE.Vector3();
+
+let initialized = false;
+const threeHost = document.getElementById('threeHost');
+
+function init3D(){
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  threeHost.appendChild(renderer.domElement);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1f2530);
+
+  camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+  camera.position.set(1.2, 1, 2.3);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0,0,0);
+  controls.update();
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 0.9));
+  const dir = new THREE.DirectionalLight(0xffffff,.8);
+  dir.position.set(1,2,1);
+  scene.add(dir);
+  scene.add(new THREE.GridHelper(4, 40, 0x445566, 0x333a46));
+
+  zList = Array.from({length: SEGMENTS+1}, (_,i)=> (i/SEGMENTS)*L_M);
+  zListCentered = zList.map(z => z - L_M/2);
+  imuPosCentered = IMU_POS_ABS.map(z => z - L_M/2);
+
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.10, roughness: 0.1 });
+  const baseGeom = new THREE.BoxGeometry(2*HALF_W, T_CENTER, 1);
+  skiInst = new THREE.InstancedMesh(baseGeom, mat, SEGMENTS);
+  skiInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(skiInst);
+
+  const spineGeom = new THREE.BufferGeometry();
+  spineGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array((SEGMENTS+1)*3), 3));
+  spine = new THREE.Line(spineGeom, new THREE.LineBasicMaterial({ color: 0xffffff, transparent:true, opacity: 0.9 }));
+  scene.add(spine);
+
+  imuMarkers = new THREE.Group();
+  const imuGeo = new THREE.BoxGeometry(IMU_W, IMU_H, IMU_L);
+  const imuMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.6, metalness: 0.0 });
+
+  imuIdx = imuPosCentered.map(zc => {
+    let best = 0, bestD = Infinity;
+    for (let i=0;i<zListCentered.length;i++){
+      const d = Math.abs(zListCentered[i] - zc);
+      if (d < bestD){ bestD = d; best = i; }
+    }
+    const mesh = new THREE.Mesh(imuGeo, imuMat);
+    mesh.castShadow = true;
+    mesh.position.set(0, 0, zListCentered[best]);
+    imuMarkers.add(mesh);
+    return best;
+  });
+  scene.add(imuMarkers);
+
+  initialized = true;
+
+  (function loop(){
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  })();
+
+  log('Ready. Load a log file + optional video.');
+  resize3D();
+  layout();
+}
+init3D();
+
+function resize3D(){
+  if (!renderer || !camera) return;
+  const r = threeHost.getBoundingClientRect();
+  const w = Math.max(10, r.width);
+  const h = Math.max(10, r.height);
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+/*** SKI PROFILE ***/
+function halfWidthAt(z){
+  const zTipStart = L_M/2 - TIP_LEN;
+  if (z >= zTipStart){
+    const t = Math.min(Math.max((z - zTipStart)/TIP_LEN, 0), 1);
+    const widthFactor = 0.3 + 0.7*(1 - t);
+    return HALF_W * widthFactor;
+  }
+  return HALF_W;
+}
+function thicknessAt(z){
+  const u = z/(L_M/2);
+  const f = Math.cos(0.5*Math.PI*u);
+  return T_END + (T_CENTER - T_END) * (f*f);
+}
+function baselineY(z){
+  const camberAmp = 0.004, camberW = 0.25;
+  const camber = camberAmp * Math.exp(-(z*z)/(2*camberW*camberW));
+  const zTipStart = L_M/2 - TIP_LEN;
+  let tip = 0;
+  if (z >= zTipStart){
+    const t = Math.min(Math.max((z - zTipStart)/TIP_LEN, 0), 1);
+    tip = ROCKER_MAX * t * t;
+  }
+  return camber + tip;
+}
+function baselineSlope(z){
+  const h=0.002;
+  return (baselineY(z+h)-baselineY(z-h))/(2*h);
+}
+function thicknessSlope(z){
+  const h=0.002;
+  return (thicknessAt(z+h) - thicknessAt(z-h)) / (2*h);
+}
+function topSurfaceSlope(z){ return baselineSlope(z) + 0.5*thicknessSlope(z); }
+function topSurfaceAngleDeg(z){ return Math.atan(topSurfaceSlope(z)) * 180/Math.PI; }
+
+/*** DATA ***/
+const N = 8;
+let pitch = new Array(N).fill(0.0);
+let roll  = new Array(N).fill(0.0);
+const pBuf = Array.from({length:N}, ()=>[]);
+const rBuf = Array.from({length:N}, ()=>[]);
+
+/*** HUD numbers ***/
+const pNumEls = Array.from({length:N}, (_,k)=>document.getElementById(`pNum${k}`));
+const rNumEls = Array.from({length:N}, (_,k)=>document.getElementById(`rNum${k}`));
+const pMeanEl = document.getElementById('pMean');
+const rMeanEl = document.getElementById('rMean');
+
+function updateNumbers(){
+  for (let k=0;k<N;k++){
+    pNumEls[k].textContent = pitch[k].toFixed(1);
+    rNumEls[k].textContent = roll[k].toFixed(1);
+  }
+  const mp = pitch.reduce((s,v)=>s+v,0)/pitch.length;
+  const mr = roll.reduce((s,v)=>s+v,0)/roll.length;
+  pMeanEl.textContent = mp.toFixed(1);
+  rMeanEl.textContent = mr.toFixed(1);
+}
+
+function pushAvg(bufs,i,v,maxN){ const a=bufs[i]; a.push(v); if(a.length>maxN) a.shift(); return a.reduce((s,x)=>s+x,0)/a.length; }
+function lerp(a,b,t){return a+(b-a)*t;}
+function interp1d(xS, vS, xq){
+  const out = new Array(xq.length);
+  for(let i=0;i<xq.length;i++){
+    const x = xq[i];
+    if (x <= xS[0]) { out[i]=vS[0]; continue; }
+    const last = xS.length-1;
+    if (x >= xS[last]){ out[i]=vS[last]; continue; }
+    let k=0;
+    while(!(xS[k] <= x && x <= xS[k+1])) k++;
+    const t = (x - xS[k])/(xS[k+1]-xS[k]);
+    out[i] = lerp(vS[k], vS[k+1], t);
+  }
+  return out;
+}
+function nearestIndexByZCentered(zc){
+  let best = 0, bestD = Infinity;
+  for (let i=0;i<zListCentered.length;i++){
+    const d = Math.abs(zListCentered[i] - zc);
+    if (d < bestD){ bestD = d; best = i; }
+  }
+  return best;
+}
+
+/*** DEFORM ***/
+function updateDeform(){
+  if (!initialized) return;
+
+  const bendK = BEND_GAIN;
+  const torsK = TORS_GAIN;
+
+  const pitchCorr = pitch.map((p,i)=>{
+    const zMat = imuPosCentered[i];
+    return p - TOP_SLOPE_COMP * topSurfaceAngleDeg(zMat);
+  });
+
+  const meanPitch = pitchCorr.reduce((s,v)=>s+v,0)/pitchCorr.length;
+  const pitchRel  = pitchCorr.map(p => p - meanPitch);
+  const rollRel   = roll.slice();
+
+  const order = [...Array(N).keys()].sort((a,b)=> imuPosCentered[a] - imuPosCentered[b]);
+  const imuPosSorted   = order.map(i => imuPosCentered[i]);
+  const pitchSortedRel = order.map(i => pitchRel[i]);
+  const rollSortedRel  = order.map(i => rollRel[i]);
+
+  const pitches = interp1d(imuPosSorted, pitchSortedRel, zListCentered);
+  const rolls   = interp1d(imuPosSorted, rollSortedRel,  zListCentered);
+
+  const xW = new Array(zListCentered.length).fill(0);
+  const yW = new Array(zListCentered.length).fill(0);
+  const zW = new Array(zListCentered.length).fill(0);
+
+  xW[0] = 0;
+  yW[0] = baselineY(zListCentered[0]);
+  zW[0] = zListCentered[0];
+
+  for (let i = 1; i < zListCentered.length; i++) {
+    const ds = zList[i] - zList[i-1];
+    const zMidMat = 0.5 * (zListCentered[i-1] + zListCentered[i]);
+
+    const th0   = Math.atan(baselineSlope(zMidMat));
+    const thDyn = (-0.5*(pitches[i-1] + pitches[i]) * Math.PI/180) * bendK;
+    const th    = th0 + thDyn;
+
+    const psi = (-0.5*(rolls[i-1] + rolls[i]) * Math.PI/180) * torsK;
+
+    const sx = -Math.sin(th) * Math.sin(psi);
+    const sy =  Math.sin(th) * Math.cos(psi);
+    const sz =  Math.cos(th);
+
+    xW[i] = xW[i-1] + sx * ds;
+    yW[i] = yW[i-1] + sy * ds;
+    zW[i] = zW[i-1] + sz * ds;
+  }
+
+  const zcFront = (L_M/2) - CONTACT_FRONT_FROM_TIP;
+  const zcBack  = (L_M/2) - CONTACT_BACK_FROM_TIP;
+
+  let iFront = nearestIndexByZCentered(zcFront);
+  let iBack  = nearestIndexByZCentered(zcBack);
+  if (zW[iFront] < zW[iBack]) { const tmp=iFront; iFront=iBack; iBack=tmp; }
+
+  const yBottomFront = yW[iFront] - 0.5*thicknessAt(zListCentered[iFront]);
+  const yBottomBack  = yW[iBack]  - 0.5*thicknessAt(zListCentered[iBack]);
+
+  const zFrontW = zW[iFront];
+  const zBackW  = zW[iBack];
+
+  const zB = zBackW;
+  const yB = yBottomBack;
+
+  const yF0 = (yBottomFront - yB);
+  const zF0 = (zFrontW - zB);
+
+  let phi = 0;
+  if (Math.abs(zF0) > 1e-9 || Math.abs(yF0) > 1e-9) phi = Math.atan2(yF0, zF0);
+  if (phi >  Math.PI/2) phi -= Math.PI;
+  if (phi < -Math.PI/2) phi += Math.PI;
+
+  const c = Math.cos(phi), s = Math.sin(phi);
+
+  function applyGroundTransform(y, z){
+    const y0 = y - yB;
+    const z0 = z - zB;
+    const yR = y0*c - z0*s;
+    const zR = y0*s + z0*c;
+    return { y: yR, z: zR + zB };
+  }
+
+  let extraLift = 0;
+  if (CLAMP_NO_PENETRATION){
+    let minBottomAll = Infinity;
+    for (let i=0;i<zListCentered.length;i++){
+      const P = applyGroundTransform(yW[i], zW[i]);
+      const yBottom = P.y - 0.5*thicknessAt(zListCentered[i]);
+      if (yBottom < minBottomAll) minBottomAll = yBottom;
+    }
+    if (minBottomAll < 0) extraLift = -minBottomAll;
+  }
+
+  const P0 = applyGroundTransform(yW[0], zW[0]);
+  const PN = applyGroundTransform(yW[yW.length-1], zW[zW.length-1]);
+  const zCenter = 0.5 * (P0.z + PN.z);
+
+  function GT(y, z, x=0){
+    const P = applyGroundTransform(y, z);
+    return { x: x, y: P.y + extraLift, z: P.z - zCenter };
+  }
+
+  const sp = spine.geometry.attributes.position.array;
+  for(let i=0;i<=SEGMENTS;i++){
+    const P = GT(yW[i], zW[i], xW[i]);
+    sp[i*3+0] = P.x;
+    sp[i*3+1] = P.y;
+    sp[i*3+2] = P.z;
+  }
+  spine.geometry.attributes.position.needsUpdate = true;
+
+  for (let i=1;i<=SEGMENTS;i++){
+    const ds = zList[i] - zList[i-1];
+
+    const yMid = 0.5*(yW[i-1] + yW[i]);
+    const zMid = 0.5*(zW[i-1] + zW[i]);
+    const xMid = 0.5*(xW[i-1] + xW[i]);
+    const Pmid = GT(yMid, zMid, xMid);
+
+    const zMidMat = 0.5*(zListCentered[i-1] + zListCentered[i]);
+
+    const wSeg = halfWidthAt(zMidMat);
+    const tSeg = thicknessAt(zMidMat);
+
+    const P0s = GT(yW[i-1], zW[i-1], xW[i-1]);
+    const P1s = GT(yW[i],   zW[i],   xW[i]);
+    zDir.set(P1s.x - P0s.x, P1s.y - P0s.y, P1s.z - P0s.z).normalize();
+
+    xDir.copy(upY).cross(zDir);
+    if (xDir.lengthSq() < 1e-12) xDir.set(1,0,0);
+    xDir.normalize();
+    yDir.copy(zDir).cross(xDir).normalize();
+
+    basisM.makeBasis(xDir, yDir, zDir);
+    qBasis.setFromRotationMatrix(basisM);
+
+    const rr = (-0.5*(rolls[i-1]+rolls[i]) * Math.PI/180) * torsK;
+    qRoll.setFromAxisAngle(zDir, rr);
+
+    tmpObj.position.set(Pmid.x, Pmid.y, Pmid.z);
+    tmpObj.quaternion.copy(qBasis).multiply(qRoll);
+    tmpObj.scale.set((wSeg / HALF_W), (tSeg / T_CENTER), ds);
+    tmpObj.updateMatrix();
+    skiInst.setMatrixAt(i-1, tmpObj.matrix);
+  }
+  skiInst.instanceMatrix.needsUpdate = true;
+
+  if (imuMarkers){
+    for (let j=0;j<imuMarkers.children.length;j++){
+      const mBox = imuMarkers.children[j];
+      const idxLocal = imuIdx[j];
+      const zMat = zListCentered[idxLocal];
+
+      const P = GT(yW[idxLocal], zW[idxLocal], xW[idxLocal]);
+
+      const i0 = Math.max(0, idxLocal-1);
+      const i1 = Math.min(zListCentered.length-1, idxLocal+1);
+      const Pa = GT(yW[i0], zW[i0], xW[i0]);
+      const Pb = GT(yW[i1], zW[i1], xW[i1]);
+      zDir.set(Pb.x - Pa.x, Pb.y - Pa.y, Pb.z - Pa.z).normalize();
+
+      xDir.copy(upY).cross(zDir);
+      if (xDir.lengthSq() < 1e-12) xDir.set(1,0,0);
+      xDir.normalize();
+      yDir.copy(zDir).cross(xDir).normalize();
+
+      basisM.makeBasis(xDir, yDir, zDir);
+      qBasis.setFromRotationMatrix(basisM);
+
+      const rr = (-rolls[idxLocal] * Math.PI/180) * torsK;
+      qRoll.setFromAxisAngle(zDir, rr);
+
+      mBox.quaternion.copy(qBasis).multiply(qRoll);
+
+      const tSeg = thicknessAt(zMat);
+      offV.copy(yDir).applyQuaternion(qRoll).multiplyScalar(0.5*tSeg + IMU_LIFT + 0.5*IMU_H);
+      mBox.position.set(P.x, P.y, P.z).add(offV);
+    }
+  }
+
+  updateNumbers();
+}
+
+/*** OFFLINE LOG PLAYBACK ***/
+const fileInput = document.getElementById('fileInput');
+const loadBtn    = document.getElementById('loadBtn');
+const playBtn    = document.getElementById('playBtn');
+const scrubEl    = document.getElementById('posScrub');
+
+let samples = []; // {tMs:number, p:number[8], r:number[8]}
+let t0Ms = 0, tEndMs = 0;
+let playing = false;
+let idx = 0;
+let wall0 = 0;
+let playT0 = 0;
+
+let pZero = new Array(N).fill(0.0);
+let rZero = new Array(N).fill(0.0);
+
+function resetSmoothing(){
+  for (let i=0;i<N;i++){ pBuf[i].length = 0; rBuf[i].length = 0; }
+}
+
+// file cols: first 8 = "roll", next 8 = "pitch"
+// viz uses: pitch <- -first8, roll <- -next8
+function orientedFromSample(s, k){
+  const pVal = -s.p[k];
+  const rVal = -s.r[k];
+  return { pVal, rVal };
+}
+
+/*** VIDEO ***/
+const vidInput = document.getElementById('vidInput');
+const loadVidBtn = document.getElementById('loadVidBtn');
+const videoEl = document.getElementById('videoEl');
+const videoNote = document.getElementById('videoNote');
+const vidOffsetEl = document.getElementById('vidOffset');
+const vidOffValEl = document.getElementById('vidOffVal');
+
+const playSpeedEl = document.getElementById('playSpeed');
+const spdValEl    = document.getElementById('spdVal');
+
+let videoLoaded = false;
+let videoObjectUrl = null;
+
+// Parse offset from the text box.
+// Accepts: "6.42", "-6.42", and also Norwegian-style decimals like "6,42".
+// Returns null while the user is mid-typing ("" or "-").
+function parseOffsetMaybe(str){
+  const s = (str ?? '').trim();
+  if (s === '' || s === '-') return null;
+  const v = parseFloat(s.replace(',', '.'));
+  return Number.isFinite(v) ? v : null;
+}
+
+// Parse speed from text box.
+// Accepts: "1", "0.5", "2,5". Returns null while mid-typing.
+function parseRateMaybe(str){
+  const s = (str ?? '').trim();
+  if (s === '' || s === '-') return null;
+  const v = parseFloat(s.replace(',', '.'));
+  return Number.isFinite(v) ? v : null;
+}
+
+function clampRate(x){
+  const lo = 0.25, hi = 4.0;
+  return Math.min(hi, Math.max(lo, x));
+}
+
+function getSpeed(){
+  const v = parseRateMaybe(playSpeedEl.value);
+  return v == null ? 1.0 : clampRate(v);
+}
+
+
+function getVidOffsetSec(){
+  const v = parseOffsetMaybe(vidOffsetEl.value);
+  return v == null ? 0 : v;
+}
+
+function snapVideoToSample(i){
+  if (!videoLoaded || !samples.length) return;
+  const s = samples[Math.max(0, Math.min(samples.length-1, i))];
+  const targetSec = ((s.tMs - t0Ms) / 1000) - getVidOffsetSec();
+  videoEl.currentTime = Math.max(0, targetSec);
+}
+
+function commitVidOffset(){
+  let v = parseOffsetMaybe(vidOffsetEl.value);
+  if (v == null) v = 0;
+  // Commit a clean numeric string only when the user is done typing
+  vidOffsetEl.value = String(v);
+  vidOffValEl.textContent = v.toFixed(2);
+  return v;
+}
+
+function commitSpeed(){
+  let v = parseRateMaybe(playSpeedEl.value);
+  if (v == null) v = 1;
+  v = clampRate(v);
+  playSpeedEl.value = String(v);
+  spdValEl.textContent = v.toFixed(2);
+  if (videoLoaded) videoEl.playbackRate = v;
+  return v;
+}
+
+
+// While typing: don't overwrite the field (that breaks typing '.' and '-')
+// Only update the displayed value if we can parse a number.
+vidOffsetEl.addEventListener('input', ()=>{
+  const v = parseOffsetMaybe(vidOffsetEl.value);
+  if (v != null) vidOffValEl.textContent = v.toFixed(2);
+});
+
+// When leaving the field (or pressing Enter): commit and snap video.
+vidOffsetEl.addEventListener('blur', ()=>{
+  commitVidOffset();
+  if (samples.length) snapVideoToSample(idx);
+});
+vidOffsetEl.addEventListener('keydown', (e)=>{
+  if (e.key === 'Enter'){
+    commitVidOffset();
+    if (samples.length) snapVideoToSample(idx);
+    vidOffsetEl.blur();
+  }
+});
+
+commitVidOffset();
+
+// Speed: applies to BOTH log + video (0.25x–4x)
+playSpeedEl.addEventListener('input', ()=>{
+  const v = parseRateMaybe(playSpeedEl.value);
+  if (v != null){
+    const c = clampRate(v);
+    spdValEl.textContent = c.toFixed(2);
+    if (videoLoaded) videoEl.playbackRate = c;
+  }
+});
+playSpeedEl.addEventListener('blur', ()=>{ commitSpeed(); });
+playSpeedEl.addEventListener('keydown', (e)=>{
+  if (e.key === 'Enter'){ commitSpeed(); playSpeedEl.blur(); }
+});
+
+commitSpeed();
+
+loadVidBtn.addEventListener('click', ()=> vidInput.click());
+vidInput.addEventListener('change', ()=>{
+  const f = vidInput.files?.[0];
+  if (!f) return;
+  if (videoObjectUrl) URL.revokeObjectURL(videoObjectUrl);
+  videoObjectUrl = URL.createObjectURL(f);
+  videoEl.src = videoObjectUrl;
+  videoEl.preload = 'auto';
+  videoEl.load();
+  videoLoaded = true;
+  videoNote.style.display = 'none';
+  videoEl.playbackRate = getSpeed();
+  log(`Loaded video: ${f.name}`);
+  if (samples.length) snapVideoToSample(idx);
+});
+
+/*** Apply sample -> updates model only (NO video seeking here) ***/
+function applySample(i){
+  if (!samples.length) return;
+  i = Math.max(0, Math.min(samples.length-1, i));
+  const s = samples[i];
+
+  const nSmooth = 1;
+
+  for (let k=0;k<N;k++){
+    const {pVal, rVal} = orientedFromSample(s, k);
+    const pUse = pVal - pZero[k];
+    const rUse = rVal - rZero[k];
+    pitch[k] = pushAvg(pBuf, k, pUse, nSmooth);
+    roll[k]  = pushAvg(rBuf, k, rUse, nSmooth);
+  }
+
+  updateNumbers();
+  updateDeform();
+
+  document.getElementById('tVal').textContent = (s.tMs / 1000).toFixed(2);
+  scrubEl.value = String((s.tMs - t0Ms) / (tEndMs - t0Ms || 1));
+}
+
+/*** Parse log ***/
+function parseLog(text){
+  const lines = text.split(/\r?\n/);
+  let header = null;
+  const out = [];
+
+  for (const raw of lines){
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('#')) continue;
+    if (line.startsWith('###')) continue;
+
+    const parts = line.split(/\t|,|;/).map(s=>s.trim());
+    if (!parts.length) continue;
+
+    if (!header){
+      if (parts[0].toLowerCase().includes('time')) header = parts;
+      continue;
+    }
+
+    if (parts.length < 17) continue;
+    const tMs = Number(parts[0]);
+    if (!Number.isFinite(tMs)) continue;
+
+    const p = new Array(8);
+    const r = new Array(8);
+    for (let i=0;i<8;i++) p[i] = Number(parts[1+i]);
+    for (let i=0;i<8;i++) r[i] = Number(parts[1+8+i]);
+
+    if (p.some(v=>!Number.isFinite(v)) || r.some(v=>!Number.isFinite(v))) continue;
+    out.push({ tMs, p, r });
+  }
+
+  out.sort((a,b)=>a.tMs-b.tMs);
+  const uniq = [];
+  let last = -Infinity;
+  for (const s of out){
+    if (s.tMs !== last){ uniq.push(s); last = s.tMs; }
+  }
+  return uniq;
+}
+
+/*** Index tracking (fast in forward playback) ***/
+function findIdxForTms(tMs){
+  while (idx < samples.length-1 && samples[idx].tMs < tMs) idx++;
+  while (idx > 0 && samples[idx].tMs > tMs) idx--;
+  return idx;
+}
+
+/*** Playback ***/
+function stop(){
+  playing = false;
+  playBtn.textContent = 'Play';
+  if (videoLoaded) videoEl.pause();
+}
+
+function play(){
+  if (!samples.length) return;
+
+  playing = true;
+  playBtn.textContent = 'Pause';
+
+  // Start time from scrub position
+  const tNow = t0Ms + parseFloat(scrubEl.value) * (tEndMs - t0Ms);
+  playT0 = tNow;
+  wall0 = performance.now();
+
+  // find index at start
+  idx = 0;
+  while (idx < samples.length-1 && samples[idx].tMs < tNow) idx++;
+  resetSmoothing();
+  applySample(idx);
+
+  // If video exists: VIDEO is master clock. Snap once and play.
+  if (videoLoaded){
+    snapVideoToSample(idx);
+    videoEl.playbackRate = getSpeed();
+    videoEl.play().catch(()=>{});
+  }
+}
+
+function togglePlay(){
+  if (!samples.length) return;
+  if (playing) stop();
+  else play();
+}
+
+function tick(){
+  requestAnimationFrame(tick);
+  if (!playing || !samples.length) return;
+
+  let tNow;
+
+  // VIDEO MASTER (smooth): do NOT seek video continuously.
+  if (videoLoaded && !videoEl.paused && Number.isFinite(videoEl.currentTime)){
+    // videoTime + offset -> log time (video is the master clock; speed comes from videoEl.playbackRate).
+    // Video time already accounts for playback speed (videoEl.playbackRate)
+    tNow = t0Ms + (videoEl.currentTime + getVidOffsetSec()) * 1000;
+  } else {
+    // fallback clock (no video / paused)
+    const ls = getSpeed();
+    tNow = playT0 + (performance.now() - wall0) * ls;
+  }
+
+  findIdxForTms(tNow);
+  applySample(idx);
+
+  if (idx >= samples.length-1) stop();
+}
+tick();
+
+/*** UI wiring ***/
+loadBtn.addEventListener('click', ()=> fileInput.click());
+
+fileInput.addEventListener('change', async ()=>{
+  const f = fileInput.files?.[0];
+  if (!f) return;
+  stop();
+  log(`Loading ${f.name}…`);
+
+  const text = await f.text();
+  samples = parseLog(text);
+
+  if (!samples.length){
+    log('No valid samples found in file.');
+    playBtn.disabled = true;
+    scrubEl.disabled = true;
+    return;
+  }
+
+  t0Ms = samples[0].tMs;
+  tEndMs = samples[samples.length-1].tMs;
+
+  pZero.fill(0); rZero.fill(0);
+  resetSmoothing();
+
+  scrubEl.disabled = false;
+  playBtn.disabled = false;
+  scrubEl.value = '0';
+  idx = 0;
+  applySample(0);
+
+  log(`Loaded ${samples.length} samples (${((tEndMs-t0Ms)/1000).toFixed(1)} s).`);
+
+  if (videoLoaded) snapVideoToSample(0);
+});
+
+playBtn.addEventListener('click', togglePlay);
+
+/*** Scrub: stop playback, update model, and hard-snap video once ***/
+scrubEl.addEventListener('input', ()=>{
+  if (!samples.length) return;
+  stop();
+
+  const tNow = t0Ms + parseFloat(scrubEl.value) * (tEndMs - t0Ms);
+  idx = 0;
+  while (idx < samples.length-1 && samples[idx].tMs < tNow) idx++;
+  resetSmoothing();
+  applySample(idx);
+
+  if (videoLoaded) snapVideoToSample(idx);
+});
+
+/*** Z: zero at current frame + snap video (optional) ***/
+window.addEventListener('keydown', e=>{
+  if ((e.key === 'z' || e.key === 'Z') && samples.length){
+    const s = samples[idx];
+    for (let k=0;k<N;k++){
+      const {pVal, rVal} = orientedFromSample(s, k);
+      pZero[k] = pVal;
+      rZero[k] = rVal;
+    }
+    resetSmoothing();
+    applySample(idx);
+    if (videoLoaded) snapVideoToSample(idx);
+    log('Zero set at current frame.');
+  }
+});
+
+/*** If user manually scrubs video controls while paused: follow video as master in UI/model ***/
+videoEl.addEventListener('seeked', ()=>{
+  if (!videoLoaded || !samples.length) return;
+  if (playing) return; // during play we already follow video time via tick()
+  if (!Number.isFinite(videoEl.currentTime)) return;
+
+  const tNow = t0Ms + ((videoEl.currentTime * getSpeed()) + getVidOffsetSec()) * 1000;
+  findIdxForTms(tNow);
+  resetSmoothing();
+  applySample(idx);
+});
+
+/*** init draw ***/
+updateNumbers();
+updateDeform();
+layout();
+</script>
+</body>
+</html>

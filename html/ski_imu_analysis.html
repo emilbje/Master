@@ -1,0 +1,1932 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Protoski IMU Analysis</title>
+<style>
+  :root{--bg:#f6f8fb;--panel:#fff;--ink:#1d2329;--muted:#66707c;--line:#d9e0e7;--line2:#b6c1ca;--teal:#158f88;--button:#eef3f5}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI",Arial,sans-serif;font-size:14px}
+  header{padding:18px 22px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+  h1{margin:0 0 4px;font-size:24px;font-weight:700}
+  header p{margin:0;color:var(--muted);max-width:1080px;line-height:1.45}
+  .toolbar{position:sticky;top:0;z-index:5;display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:10px;padding:12px 22px;background:rgba(255,255,255,.96);border-bottom:1px solid var(--line);box-shadow:0 5px 18px rgba(30,38,44,.08)}
+  .control{min-width:0;display:flex;flex-direction:column;gap:5px}
+  .wide{grid-column:span 2}.full{grid-column:1/-1}
+  label{font-size:12px;font-weight:650;color:#33404c}
+  input,select,button{min-height:34px;border:1px solid var(--line2);border-radius:6px;color:var(--ink);background:#fff;font:inherit}
+  input[type=file]{padding:6px 8px}input[type=number]{padding:4px 8px}input[type=range]{width:100%;min-height:26px}select{padding:4px 8px}
+  button{cursor:pointer;background:var(--button);padding:6px 12px;font-weight:650}
+  button.primary{border-color:#0c6f6a;background:#dff3ef;color:#074a48}button:disabled{cursor:not-allowed;opacity:.55}
+  .checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;align-items:center}
+  .check{display:flex;gap:7px;align-items:center;min-height:26px;color:var(--ink);font-size:13px}.check input{min-height:0}
+  .timeline{display:grid;grid-template-columns:112px 1fr 90px 96px;gap:10px;align-items:center}
+  #status{color:var(--muted);line-height:1.35;min-height:19px}
+  main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:14px 22px 22px}
+  section{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+  h2{margin:0 0 8px;font-size:16px}.plot-note{margin:0 0 10px;color:var(--muted);line-height:1.35;font-size:12px}
+  canvas{display:block;width:100%;height:345px;border:1px solid var(--line);border-radius:6px;background:#fff}
+  #torsion3dCanvas{cursor:grab}#torsion3dCanvas.dragging{cursor:grabbing}.plot-wide,.readout{grid-column:1/-1}
+  .factory-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+  .factory-card{min-width:0;border:1px solid var(--line);border-radius:6px;padding:8px;background:#fbfdfe}
+  .factory-card h3{margin:0 0 6px;font-size:13px;color:#33404c}
+  .factory-canvas{height:210px}
+  .factory-empty{border:1px dashed var(--line2);border-radius:6px;padding:14px;color:var(--muted);background:#fbfdfe}
+  .cal-grid{display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:10px;align-items:end}
+  .interval-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}.button-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}th{color:#33404c;background:#f2f6f8;font-weight:700}.small{color:var(--muted);font-size:12px;line-height:1.35}
+  @media(max-width:1120px){.toolbar{grid-template-columns:repeat(3,minmax(130px,1fr))}}
+  @media(max-width:840px){header,.toolbar,main{padding-left:12px;padding-right:12px}.toolbar,main,.cal-grid{grid-template-columns:1fr}.wide,.full,.plot-wide,.readout{grid-column:auto}.timeline{grid-template-columns:1fr}canvas{height:310px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Protoski IMU Analysis</h1>
+  <p>Upload a TXT log with time_ms, p0-p7, and r0-r7 columns. The first unloaded samples are used as the zero baseline, and IMU3 can be subtracted from every IMU to remove common ground tilt.</p>
+</header>
+
+<div class="toolbar">
+  <div class="control wide"><label for="fileInput">TXT log</label><input id="fileInput" type="file" accept=".txt,.TXT,.csv,.tsv"></div>
+  <div class="control wide"><label for="factoryInput">Factory bend CSV</label><input id="factoryInput" type="file" accept=".csv,.CSV,.txt,.TXT"></div>
+  <div class="control"><label for="columnMode">Column mapping</label><select id="columnMode"><option value="pPitch_rRoll">p = pitch, r = roll</option><option value="rPitch_pRoll">r = pitch, p = roll</option></select></div>
+  <div class="control"><label for="baselineCount">Unloaded baseline samples</label><input id="baselineCount" type="number" min="1" max="5000" step="1" value="300"></div>
+  <div class="control"><label for="smoothWindow">Time smoothing samples</label><input id="smoothWindow" type="number" min="1" max="101" step="2" value="3"></div>
+  <div class="control"><label for="heatMode">Heat value</label><select id="heatMode"><option value="rms">RMS over whole log</option><option value="max">Max over whole log</option><option value="mean">Mean over whole log</option><option value="current">Current frame</option></select></div>
+  <div class="control"><label for="bendScale">Side bend visual scale: <span id="bendScaleValue">1.0</span></label><input id="bendScale" type="range" min="0.1" max="10" step="0.1" value="1"></div>
+  <div class="control"><label for="torsionScale">3D torsion visual scale: <span id="torsionScaleValue">1.0</span></label><input id="torsionScale" type="range" min="0.1" max="8" step="0.1" value="1"></div>
+  <div class="control wide">
+    <label>Corrections</label>
+    <div class="checks">
+      <label class="check"><input id="subtractImu3" type="checkbox" checked> subtract IMU3</label>
+      <label class="check"><input id="removeBaseline" type="checkbox" checked> remove unloaded baseline</label>
+      <label class="check"><input id="anchorTips" type="checkbox" checked> anchor side-view tips</label>
+      <label class="check"><input id="loopPlayback" type="checkbox"> loop playback</label>
+    </div>
+  </div>
+  <div class="control full timeline"><button id="playButton" class="primary" disabled>Play</button><input id="timeSlider" type="range" min="0" max="0" step="1" value="0" disabled><select id="speedSelect"><option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option><option value="8">8x</option></select><div id="timeLabel">0.000 s</div></div>
+  <div class="control full"><div id="status">Choose a log file to start.</div></div>
+</div>
+
+<main>
+  <section class="plot-wide"><h2>1. Side View Pitch Profile</h2><p class="plot-note">Pitch deltas are interpolated along the measured sensor span. With a factory CSV loaded, the unloaded underside and load envelope come from the measured factory bend test.</p><canvas id="sideCanvas"></canvas></section>
+  <section><h2>2. Top View Bending Heat</h2><p class="plot-note">Heat is based on the pitch gradient along the ski. The view is cut at IMU0 and IMU7, so it only shows the measured span.</p><canvas id="bendHeatCanvas"></canvas></section>
+  <section><h2>3. 3D Torsion From Roll</h2><p class="plot-note">Roll deltas twist the measured sensor span only. Pitch bending is not applied in this plot, so the centerline stays at the neutral ski profile. Drag inside the plot to rotate the view.</p><canvas id="torsion3dCanvas"></canvas></section>
+  <section class="plot-wide"><h2>4. Side View Torsion Heat</h2><p class="plot-note">Heat is based on the roll gradient along the measured sensor span. Thickness follows the measured IMU values and is mildly enlarged here so the color field is easier to read.</p><canvas id="torsionHeatCanvas"></canvas></section>
+  <section class="readout">
+    <h2>5. Factory Bend Profiles</h2>
+    <p id="factoryNote" class="plot-note">Load the factory CSV to draw one measured underside profile for each load. The unloaded ski is drawn translucent behind each loaded profile.</p>
+    <div id="factoryProfiles" class="factory-grid"><div class="factory-empty">No factory CSV loaded.</div></div>
+  </section>
+  <section class="readout">
+    <h2>6. Field Load Calibration</h2>
+    <p class="plot-note">Mark one interval where you stand on the ski and one interval where you stomp it down. The IMU signal is then mapped to load, and the side view uses interpolated factory bend profiles through the whole test.</p>
+    <div class="cal-grid">
+      <div class="control"><label for="standLoad">Standing load [kg]</label><input id="standLoad" type="number" min="0" max="160" step="0.5" value="40"></div>
+      <div class="control"><label>Standing interval [s]</label><div class="interval-row"><input id="standStart" type="number" min="0" step="0.001" placeholder="start"><input id="standEnd" type="number" min="0" step="0.001" placeholder="end"></div></div>
+      <div class="control"><label>Set standing from slider</label><div class="button-row"><button id="standStartButton" type="button">Start</button><button id="standEndButton" type="button">End</button></div></div>
+      <div class="control"><label for="stompLoad">Stomp load [kg]</label><input id="stompLoad" type="number" min="0" max="160" step="0.5" value="80"></div>
+      <div class="control"><label>Stomp interval [s]</label><div class="interval-row"><input id="stompStart" type="number" min="0" step="0.001" placeholder="start"><input id="stompEnd" type="number" min="0" step="0.001" placeholder="end"></div></div>
+      <div class="control"><label>Set stomp from slider</label><div class="button-row"><button id="stompStartButton" type="button">Start</button><button id="stompEndButton" type="button">End</button></div></div>
+      <div class="control"><label for="targetLoad">Fallback target load [kg]</label><input id="targetLoad" type="number" min="0" max="200" step="0.1" value="49.6"></div>
+      <div class="control"><label for="outlierPercentile">Fallback percentile [%]</label><input id="outlierPercentile" type="number" min="90" max="100" step="0.1" value="99.5"></div>
+    </div>
+    <p id="fieldCalNote" class="small">Fill in both intervals to enable field calibration. Leave them blank to use the fallback factory target calibration.</p>
+  </section>
+  <section class="readout">
+    <h2>Current IMU Values Used For Plots</h2>
+    <table><thead><tr><th>IMU</th><th>Position from back tip [m]</th><th>Thickness [mm]</th><th>Pitch delta [deg]</th><th>Roll delta [deg]</th><th>Bend rate nearby [deg/m]</th><th>Torsion rate nearby [deg/m]</th></tr></thead><tbody id="imuTableBody"></tbody></table>
+    <p class="small">Bend and torsion heat use spatial gradients because a constant pitch or roll offset is mostly rigid-body orientation, while changing angle along the ski indicates bending or twist concentration.</p>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const L_M = 1.87;
+  const N_IMU = 8;
+  const GRID_N = 221;
+  const BASE_WIDTH_M = 0.045;
+  const BACK_TIP_WIDTH_M = 0.023;
+  const FRONT_TIP_WIDTH_M = 0.008;
+  const CAMBER_MAX_M = 0.021;
+  const CAMBER_PEAK_X_M = 0.80;
+  const TAIL_CONTACT_X_M = 0.20;
+  const FRONT_CONTACT_X_M = 1.60;
+  const TAIL_ROCKER_M = 0.007;
+  const FRONT_ROCKER_M = 0.018;
+  const SIDE_VIEW_VERTICAL_EXAGGERATION = 1.0;
+  const TOP_VIEW_WIDTH_EXAGGERATION = 1.0;
+  const BENDING_SOFT_LIMIT_START = 0.65;
+  const TORSION_HEAT_THICKNESS_EXAGGERATION = 1.7;
+  const TORSION_3D_HEIGHT_EXAGGERATION = 2.0;
+  const TORSION_3D_WIDTH_EXAGGERATION = 2.2;
+  const TORSION_3D_MAX_TWIST_RAD = Math.PI / 4;
+  const FACTORY_LOAD_POINT_BALANCE_MM = 140;
+
+  const IMU_POS_ABS = [
+    L_M - 1.735, L_M - 1.555, L_M - 1.375, L_M - 0.850,
+    L_M - 0.683, L_M - 0.512, L_M - 0.343, L_M - 0.170
+  ];
+  const IMU_THICKNESS_M = [0.006, 0.011, 0.018, 0.024, 0.019, 0.010, 0.006, 0.004];
+  const MEASURED_X_MIN = Math.min(...IMU_POS_ABS);
+  const MEASURED_X_MAX = Math.max(...IMU_POS_ABS);
+
+  const els = {
+    fileInput: document.getElementById("fileInput"),
+    factoryInput: document.getElementById("factoryInput"),
+    columnMode: document.getElementById("columnMode"),
+    baselineCount: document.getElementById("baselineCount"),
+    smoothWindow: document.getElementById("smoothWindow"),
+    heatMode: document.getElementById("heatMode"),
+    targetLoad: document.getElementById("targetLoad"),
+    outlierPercentile: document.getElementById("outlierPercentile"),
+    bendScale: document.getElementById("bendScale"),
+    bendScaleValue: document.getElementById("bendScaleValue"),
+    torsionScale: document.getElementById("torsionScale"),
+    torsionScaleValue: document.getElementById("torsionScaleValue"),
+    subtractImu3: document.getElementById("subtractImu3"),
+    removeBaseline: document.getElementById("removeBaseline"),
+    anchorTips: document.getElementById("anchorTips"),
+    loopPlayback: document.getElementById("loopPlayback"),
+    playButton: document.getElementById("playButton"),
+    timeSlider: document.getElementById("timeSlider"),
+    speedSelect: document.getElementById("speedSelect"),
+    timeLabel: document.getElementById("timeLabel"),
+    status: document.getElementById("status"),
+    imuTableBody: document.getElementById("imuTableBody"),
+    factoryNote: document.getElementById("factoryNote"),
+    factoryProfiles: document.getElementById("factoryProfiles"),
+    fieldCalNote: document.getElementById("fieldCalNote"),
+    standLoad: document.getElementById("standLoad"),
+    standStart: document.getElementById("standStart"),
+    standEnd: document.getElementById("standEnd"),
+    standStartButton: document.getElementById("standStartButton"),
+    standEndButton: document.getElementById("standEndButton"),
+    stompLoad: document.getElementById("stompLoad"),
+    stompStart: document.getElementById("stompStart"),
+    stompEnd: document.getElementById("stompEnd"),
+    stompStartButton: document.getElementById("stompStartButton"),
+    stompEndButton: document.getElementById("stompEndButton"),
+    sideCanvas: document.getElementById("sideCanvas"),
+    bendHeatCanvas: document.getElementById("bendHeatCanvas"),
+    torsion3dCanvas: document.getElementById("torsion3dCanvas"),
+    torsionHeatCanvas: document.getElementById("torsionHeatCanvas")
+  };
+
+  const xGrid = Array.from({ length: GRID_N }, (_, i) => (i / (GRID_N - 1)) * L_M);
+  const imuOrder = Array.from({ length: N_IMU }, (_, i) => i).sort((a, b) => IMU_POS_ABS[a] - IMU_POS_ABS[b]);
+  const thicknessXs = imuOrder.map((idx) => IMU_POS_ABS[idx]);
+  const thicknessYs = imuOrder.map((idx) => IMU_THICKNESS_M[idx]);
+  const thicknessSlopes = pchipSlopes(thicknessXs, thicknessYs);
+
+  let rawRows = [];
+  let frames = [];
+  let stats = null;
+  let currentIndex = 0;
+  let playing = false;
+  let playStartWall = 0;
+  let playStartLogSec = 0;
+  let currentFileName = "";
+  let factoryData = null;
+  let currentFactoryFileName = "";
+  let factoryProfileCanvases = [];
+  let factoryCardsDirty = true;
+  let factoryLayoutWidth = 0;
+  let imuCalibration = {
+    applied: false, mode: "none", scale: 1, targetLoadKg: 49.6, actualLoadKg: null, percentile: 99.5,
+    robustMaxM: 0, targetMaxM: 0, clippedFrames: 0, sign: 1,
+    lowerGrid: null, upperGrid: null, targetGrid: null, targetFlatteningGrid: null,
+    loadOffset: 0, loadPerCoefficient: 0, refFlatteningGrid: null,
+    standLoadKg: 40, stompLoadKg: 80, standCoeff: 0, stompCoeff: 0,
+    standFrames: 0, stompFrames: 0
+  };
+
+  const view3d = { yaw: -0.42, pitch: 0.30, drag: false, lastX: 0, lastY: 0 };
+
+  function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function format(value, digits = 2) { return Number.isFinite(value) ? value.toFixed(digits) : "-"; }
+  function setStatus(message) { els.status.textContent = message; }
+  function isGoodNumber(value) { return Number.isFinite(value) && Math.abs(value + 999.9) > 1e-6; }
+
+  function widthAt(x) {
+    const tailFlatLen = 0.035;
+    const tailTaperLen = 0.145;
+    const frontTaperStart = L_M - 0.44;
+
+    if (x < tailFlatLen) {
+      return BACK_TIP_WIDTH_M;
+    }
+    if (x < tailFlatLen + tailTaperLen) {
+      return lerp(BACK_TIP_WIDTH_M, BASE_WIDTH_M, smoothstep((x - tailFlatLen) / tailTaperLen));
+    }
+    if (x > frontTaperStart) {
+      return lerp(BASE_WIDTH_M, FRONT_TIP_WIDTH_M, smoothstep((x - frontTaperStart) / (L_M - frontTaperStart)));
+    }
+    return BASE_WIDTH_M;
+  }
+
+  function smoothstep(t) {
+    const u = clamp(t, 0, 1);
+    return u * u * (3 - 2 * u);
+  }
+
+  function pchipSlopes(xs, ys) {
+    const n = xs.length;
+    const h = new Array(n - 1);
+    const d = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      h[i] = xs[i + 1] - xs[i];
+      d[i] = (ys[i + 1] - ys[i]) / h[i];
+    }
+    const m = new Array(n).fill(0);
+    const endpointSlope = (h0, h1, d0, d1) => {
+      let slope = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
+      if (slope * d0 <= 0) return 0;
+      if (d0 * d1 < 0 && Math.abs(slope) > Math.abs(3 * d0)) return 3 * d0;
+      return slope;
+    };
+    m[0] = endpointSlope(h[0], h[1], d[0], d[1]);
+    m[n - 1] = endpointSlope(h[n - 2], h[n - 3], d[n - 2], d[n - 3]);
+    for (let i = 1; i < n - 1; i++) {
+      if (d[i - 1] * d[i] <= 0) {
+        m[i] = 0;
+      } else {
+        const w1 = 2 * h[i] + h[i - 1];
+        const w2 = h[i] + 2 * h[i - 1];
+        m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+      }
+    }
+    return m;
+  }
+
+  function pchipAt(x, xs, ys, slopes) {
+    if (x <= xs[0]) return ys[0];
+    if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
+    let i = 0;
+    while (i < xs.length - 2 && x > xs[i + 1]) i++;
+    const h = xs[i + 1] - xs[i];
+    const t = (x - xs[i]) / h;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1;
+    const h10 = t3 - 2 * t2 + t;
+    const h01 = -2 * t3 + 3 * t2;
+    const h11 = t3 - t2;
+    return h00 * ys[i] + h10 * h * slopes[i] + h01 * ys[i + 1] + h11 * h * slopes[i + 1];
+  }
+
+  function thicknessAt(x) {
+    return pchipAt(x, thicknessXs, thicknessYs, thicknessSlopes);
+  }
+
+  function camberAt(x) {
+    const effectiveLen = FRONT_CONTACT_X_M - TAIL_CONTACT_X_M;
+    let camber = 0;
+    if (x > TAIL_CONTACT_X_M && x < FRONT_CONTACT_X_M) {
+      const u = clamp((x - TAIL_CONTACT_X_M) / effectiveLen, 0, 1);
+      const mode = clamp((CAMBER_PEAK_X_M - TAIL_CONTACT_X_M) / effectiveLen, 0.05, 0.95);
+      const a = 1.8;
+      const b = a * (1 - mode) / mode;
+      const value = Math.pow(u, a) * Math.pow(1 - u, b);
+      const maxValue = Math.pow(mode, a) * Math.pow(1 - mode, b);
+      camber = CAMBER_MAX_M * value / maxValue;
+    }
+
+    let rocker = 0;
+    if (x < TAIL_CONTACT_X_M) {
+      rocker = TAIL_ROCKER_M * smoothstep(1 - x / TAIL_CONTACT_X_M);
+    } else if (x > FRONT_CONTACT_X_M) {
+      rocker = FRONT_ROCKER_M * smoothstep((x - FRONT_CONTACT_X_M) / (L_M - FRONT_CONTACT_X_M));
+    }
+    return camber + rocker;
+  }
+
+  function arrayInterpAt(xs, ys, x) {
+    if (x <= xs[0]) return ys[0];
+    if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
+    let lo = 0;
+    let hi = xs.length - 1;
+    while (hi - lo > 1) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (xs[mid] <= x) lo = mid;
+      else hi = mid;
+    }
+    const t = (x - xs[lo]) / (xs[hi] - xs[lo] || 1);
+    return lerp(ys[lo], ys[hi], t);
+  }
+
+  function factoryProfileAt(profile, x, fallback) {
+    if (!factoryData || !profile || x < factoryData.xMin || x > factoryData.xMax) return fallback;
+    return arrayInterpAt(factoryData.xM, profile, x);
+  }
+
+  function factoryProfileAtFrom(data, profile, x, fallback) {
+    if (!data || !profile || x < data.xMin || x > data.xMax) return fallback;
+    return arrayInterpAt(data.xM, profile, x);
+  }
+
+  function baselineBottomAt(x) {
+    if (factoryData && factoryData.unloadedGrid) return interpAt(factoryData.unloadedGrid, x);
+    return camberAt(x);
+  }
+
+  function lowerBendLimitAt(x) {
+    if (imuCalibration.applied && imuCalibration.lowerGrid) return interpAt(imuCalibration.lowerGrid, x);
+    if (factoryData && factoryData.lowerGrid) return interpAt(factoryData.lowerGrid, x);
+    return 0;
+  }
+
+  function upperBendLimitAt(x) {
+    if (imuCalibration.applied && imuCalibration.upperGrid) return interpAt(imuCalibration.upperGrid, x);
+    if (factoryData && factoryData.upperGrid) return interpAt(factoryData.upperGrid, x);
+    return baselineBottomAt(x);
+  }
+
+  function baselineTopAt(x) { return baselineBottomAt(x) + thicknessAt(x); }
+
+  function measuredProfileXs() {
+    return [MEASURED_X_MIN, ...xGrid.filter((x) => x > MEASURED_X_MIN && x < MEASURED_X_MAX), MEASURED_X_MAX];
+  }
+
+  function softLimitedBottom(rawBottom, naturalCamber) {
+    if (naturalCamber <= 1e-6) return 0;
+    const flatteningDemand = naturalCamber - rawBottom;
+    if (flatteningDemand <= 0) return naturalCamber;
+    const linearDemand = naturalCamber * BENDING_SOFT_LIMIT_START;
+    if (flatteningDemand <= linearDemand) return naturalCamber - flatteningDemand;
+    const remainingHeight = Math.max(1e-6, naturalCamber - linearDemand);
+    return remainingHeight * Math.exp(-(flatteningDemand - linearDemand) / remainingHeight);
+  }
+
+  function constrainedSideShape(yDeflection, scale = 1) {
+    const naturalGrid = xGrid.map(baselineBottomAt);
+    const lowerGrid = xGrid.map(lowerBendLimitAt);
+    const upperGrid = xGrid.map(upperBendLimitAt);
+    const calibratedScale = scale * (imuCalibration.applied ? imuCalibration.scale : 1);
+    const useFieldLoadMap = imuCalibration.applied && imuCalibration.mode === "field" && imuCalibration.refFlatteningGrid;
+    const useFactoryShape = imuCalibration.applied && imuCalibration.mode !== "field" && imuCalibration.targetGrid && imuCalibration.targetFlatteningGrid;
+    let rawBottom;
+    let bendFactor = 0;
+    let estimatedLoadKg = null;
+    if (useFieldLoadMap) {
+      const coefficient = bendCoefficientFromDeflection(yDeflection, imuCalibration.refFlatteningGrid, imuCalibration.sign);
+      const mappedLoad = imuCalibration.loadOffset + imuCalibration.loadPerCoefficient * coefficient;
+      const visualLoad = mappedLoad * scale;
+      estimatedLoadKg = clamp(visualLoad, factoryData.loadMinKg, factoryData.loadMaxKg);
+      bendFactor = factoryData.loadMaxKg > factoryData.loadMinKg ? (estimatedLoadKg - factoryData.loadMinKg) / (factoryData.loadMaxKg - factoryData.loadMinKg) : 0;
+      rawBottom = factoryGridAtLoad(estimatedLoadKg);
+    } else if (useFactoryShape) {
+      const coefficient = bendCoefficientFromDeflection(yDeflection, imuCalibration.targetFlatteningGrid, imuCalibration.sign);
+      const rawFactor = coefficient * calibratedScale;
+      bendFactor = clamp(rawFactor, 0, 1);
+      rawBottom = xGrid.map((x, i) => lerp(naturalGrid[i], imuCalibration.targetGrid[i], rawFactor));
+    } else {
+      const bendDeflection = factoryData ? detrendOverMeasuredSpan(yDeflection) : yDeflection;
+      rawBottom = xGrid.map((x, i) => naturalGrid[i] + bendDeflection[i] * calibratedScale);
+    }
+    let maxFlatClip = 0;
+    let maxCamberClip = 0;
+    const bottom = rawBottom.map((y, i) => {
+      const natural = naturalGrid[i];
+      if (factoryData) {
+        const lower = Math.min(lowerGrid[i], upperGrid[i]);
+        const upper = Math.max(lowerGrid[i], upperGrid[i]);
+        if (y < lower) maxFlatClip = Math.max(maxFlatClip, lower - y);
+        if (y > upper) maxCamberClip = Math.max(maxCamberClip, y - upper);
+        return clamp(y, lower, upper);
+      }
+      if (y < 0) maxFlatClip = Math.max(maxFlatClip, -y);
+      if (y > natural) maxCamberClip = Math.max(maxCamberClip, y - natural);
+      return softLimitedBottom(y, natural);
+    });
+    const top = bottom.map((y, i) => y + thicknessAt(xGrid[i]));
+    return { top, bottom, rawBottom, maxFlatClip, maxCamberClip, natural: naturalGrid, lower: lowerGrid, upper: upperGrid, bendFactor, estimatedLoadKg };
+  }
+
+  function splitFields(line) { return line.trim().split(/[\t,; ]+/).filter(Boolean); }
+
+  function parseLooseNumber(value) {
+    const text = String(value ?? "").trim();
+    if (!text || /^nan$/i.test(text)) return NaN;
+    return Number(text.replace(",", "."));
+  }
+
+  function parseLog(text) {
+    const rows = [];
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const parts = splitFields(line);
+      if (parts.length < 17) continue;
+      const timeMs = Number(parts[0]);
+      if (!Number.isFinite(timeMs)) continue;
+      const p = new Array(N_IMU);
+      const r = new Array(N_IMU);
+      for (let i = 0; i < N_IMU; i++) {
+        const value = Number(parts[1 + i]);
+        p[i] = isGoodNumber(value) ? value : NaN;
+      }
+      for (let i = 0; i < N_IMU; i++) {
+        const value = Number(parts[1 + N_IMU + i]);
+        r[i] = isGoodNumber(value) ? value : NaN;
+      }
+      rows.push({ timeMs, p, r });
+    }
+    rows.sort((a, b) => a.timeMs - b.timeMs);
+    const unique = [];
+    let lastTime = null;
+    for (const row of rows) {
+      if (row.timeMs !== lastTime) {
+        unique.push(row);
+        lastTime = row.timeMs;
+      }
+    }
+    return unique;
+  }
+
+  function splitCsvRow(line) {
+    return line.trim().split(/[,\t;]/);
+  }
+
+  function fillFactoryProfile(xs, values) {
+    const out = values.slice();
+    if (!out.some(Number.isFinite)) return new Array(values.length).fill(0);
+    for (let i = 0; i < out.length; i++) {
+      if (Number.isFinite(out[i])) continue;
+      let left = null;
+      let right = null;
+      for (let j = i - 1; j >= 0; j--) if (Number.isFinite(out[j])) { left = j; break; }
+      for (let j = i + 1; j < out.length; j++) if (Number.isFinite(out[j])) { right = j; break; }
+      if (left !== null && right !== null) {
+        const t = (xs[i] - xs[left]) / (xs[right] - xs[left] || 1);
+        out[i] = lerp(out[left], out[right], t);
+      } else if (left !== null) {
+        out[i] = out[left];
+      } else {
+        out[i] = out[right];
+      }
+    }
+    return out;
+  }
+
+  function buildFactoryDerived(data) {
+    data.xMin = data.xM[0];
+    data.xMax = data.xM[data.xM.length - 1];
+    data.scanLengthM = data.xMax - data.xMin;
+    data.unloadedIndex = data.loadsKg.reduce((best, load, i) => Math.abs(load) < Math.abs(data.loadsKg[best]) ? i : best, 0);
+    data.loadOrder = Array.from({ length: data.loadsKg.length }, (_, i) => i).sort((a, b) => data.loadsKg[a] - data.loadsKg[b]);
+    data.loadMinKg = data.loadsKg[data.loadOrder[0]];
+    data.loadMaxKg = data.loadsKg[data.loadOrder[data.loadOrder.length - 1]];
+    data.balanceXM = data.backDistanceMm / 1000;
+    data.loadPointXM = (data.backDistanceMm - FACTORY_LOAD_POINT_BALANCE_MM) / 1000;
+    data.yMinM = Infinity;
+    data.yMaxM = -Infinity;
+    for (const profile of data.profiles) {
+      for (const y of profile) {
+        data.yMinM = Math.min(data.yMinM, y);
+        data.yMaxM = Math.max(data.yMaxM, y);
+      }
+    }
+    if (!Number.isFinite(data.yMinM)) data.yMinM = 0;
+    if (!Number.isFinite(data.yMaxM)) data.yMaxM = 0.03;
+
+    const unloaded = data.profiles[data.unloadedIndex];
+    data.unloadedGrid = xGrid.map((x) => factoryProfileAtFrom(data, unloaded, x, camberAt(x)));
+    data.lowerGrid = xGrid.map((x) => {
+      if (x < data.xMin || x > data.xMax) return 0;
+      let value = Infinity;
+      for (const profile of data.profiles) value = Math.min(value, arrayInterpAt(data.xM, profile, x));
+      return Number.isFinite(value) ? value : 0;
+    });
+    data.upperGrid = xGrid.map((x) => {
+      if (x < data.xMin || x > data.xMax) return camberAt(x);
+      let value = -Infinity;
+      for (const profile of data.profiles) value = Math.max(value, arrayInterpAt(data.xM, profile, x));
+      return Number.isFinite(value) ? value : camberAt(x);
+    });
+    return data;
+  }
+
+  function factoryHeightAtLoad(data, loadKg, x, fallback) {
+    if (!data || x < data.xMin || x > data.xMax) return fallback;
+    const order = data.loadOrder;
+    if (!order || !order.length) return fallback;
+    if (loadKg <= data.loadsKg[order[0]]) {
+      return arrayInterpAt(data.xM, data.profiles[order[0]], x);
+    }
+    const last = order[order.length - 1];
+    if (loadKg >= data.loadsKg[last]) {
+      return arrayInterpAt(data.xM, data.profiles[last], x);
+    }
+    for (let i = 0; i < order.length - 1; i++) {
+      const a = order[i];
+      const b = order[i + 1];
+      const loadA = data.loadsKg[a];
+      const loadB = data.loadsKg[b];
+      if (loadKg >= loadA && loadKg <= loadB) {
+        const t = (loadKg - loadA) / (loadB - loadA || 1);
+        const yA = arrayInterpAt(data.xM, data.profiles[a], x);
+        const yB = arrayInterpAt(data.xM, data.profiles[b], x);
+        return lerp(yA, yB, t);
+      }
+    }
+    return fallback;
+  }
+
+  function factoryGridAtLoad(loadKg) {
+    if (!factoryData) return xGrid.map(camberAt);
+    const clampedLoad = clamp(loadKg, factoryData.loadMinKg, factoryData.loadMaxKg);
+    return xGrid.map((x) => factoryHeightAtLoad(factoryData, clampedLoad, x, camberAt(x)));
+  }
+
+  function factoryFlatteningGridForLoad(loadKg) {
+    if (!factoryData) return new Array(GRID_N).fill(0);
+    const unloadedGrid = factoryData.unloadedGrid || xGrid.map(baselineBottomAt);
+    const loadedGrid = factoryGridAtLoad(loadKg);
+    return detrendOverMeasuredSpan(unloadedGrid.map((y, i) => y - loadedGrid[i]));
+  }
+
+  function parseFactoryCsv(text) {
+    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length < 3) throw new Error("The factory CSV needs one load header row and measured profile rows.");
+    const header = splitCsvRow(lines[0]);
+    const loadsKg = [];
+    const loadColumns = [];
+    for (let i = 1; i < header.length; i++) {
+      const load = parseLooseNumber(header[i]);
+      if (Number.isFinite(load)) {
+        loadsKg.push(load);
+        loadColumns.push(i);
+      }
+    }
+    if (!loadsKg.length) throw new Error("No load values were found in the first row.");
+
+    const rows = [];
+    for (let lineIndex = 1; lineIndex < lines.length; lineIndex++) {
+      const parts = splitCsvRow(lines[lineIndex]);
+      const distanceMm = parseLooseNumber(parts[0]);
+      if (!Number.isFinite(distanceMm)) continue;
+      const values = loadColumns.map((column) => parseLooseNumber(parts[column]));
+      if (values.some(Number.isFinite)) rows.push({ distanceMm, values });
+    }
+    if (rows.length < 3) throw new Error("Not enough measured profile rows were found.");
+
+    const backDistanceMm = Math.max(...rows.map((row) => row.distanceMm));
+    for (const row of rows) row.xM = (backDistanceMm - row.distanceMm) / 1000;
+    rows.sort((a, b) => a.xM - b.xM);
+
+    const xM = rows.map((row) => row.xM);
+    const profiles = loadsKg.map((_, loadIndex) => fillFactoryProfile(
+      xM,
+      rows.map((row) => Number.isFinite(row.values[loadIndex]) ? row.values[loadIndex] / 1000 : NaN)
+    ));
+    return buildFactoryDerived({ loadsKg, loadColumns, xM, profiles, backDistanceMm });
+  }
+
+  function fillImuArray(values) {
+    const out = values.slice();
+    if (!out.some(Number.isFinite)) return new Array(N_IMU).fill(0);
+    for (let i = 0; i < out.length; i++) {
+      if (Number.isFinite(out[i])) continue;
+      let left = null;
+      let right = null;
+      for (let j = i - 1; j >= 0; j--) if (Number.isFinite(out[j])) { left = j; break; }
+      for (let j = i + 1; j < out.length; j++) if (Number.isFinite(out[j])) { right = j; break; }
+      if (left !== null && right !== null) {
+        const t = (IMU_POS_ABS[i] - IMU_POS_ABS[left]) / (IMU_POS_ABS[right] - IMU_POS_ABS[left]);
+        out[i] = lerp(out[left], out[right], t);
+      } else if (left !== null) {
+        out[i] = out[left];
+      } else if (right !== null) {
+        out[i] = out[right];
+      } else {
+        out[i] = 0;
+      }
+    }
+    return out;
+  }
+
+  function median(values) {
+    const clean = values.filter(Number.isFinite).sort((a, b) => a - b);
+    if (!clean.length) return 0;
+    const mid = Math.floor(clean.length / 2);
+    return clean.length % 2 ? clean[mid] : 0.5 * (clean[mid - 1] + clean[mid]);
+  }
+
+  function percentileValue(values, percentile) {
+    const clean = values.filter(Number.isFinite).sort((a, b) => a - b);
+    if (!clean.length) return 0;
+    const pos = clamp(percentile, 0, 100) / 100 * (clean.length - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    if (lo === hi) return clean[lo];
+    return lerp(clean[lo], clean[hi], pos - lo);
+  }
+
+  function getMappedAngles(row) {
+    let pitch;
+    let roll;
+    if (els.columnMode.value === "rPitch_pRoll") {
+      pitch = row.r.slice();
+      roll = row.p.slice();
+    } else {
+      pitch = row.p.slice();
+      roll = row.r.slice();
+    }
+    pitch = fillImuArray(pitch);
+    roll = fillImuArray(roll);
+    if (els.subtractImu3.checked) {
+      const pRef = Number.isFinite(pitch[3]) ? pitch[3] : 0;
+      const rRef = Number.isFinite(roll[3]) ? roll[3] : 0;
+      pitch = pitch.map((v) => v - pRef);
+      roll = roll.map((v) => v - rRef);
+    }
+    return { pitch, roll };
+  }
+
+  function smoothFrames(inputFrames, windowSize) {
+    const size = Math.max(1, Math.floor(windowSize));
+    if (size <= 1 || inputFrames.length <= 2) return inputFrames;
+    const half = Math.floor(size / 2);
+    const output = inputFrames.map((frame) => ({
+      timeMs: frame.timeMs, timeSec: frame.timeSec,
+      pitch: new Array(N_IMU).fill(0), roll: new Array(N_IMU).fill(0)
+    }));
+    for (let i = 0; i < inputFrames.length; i++) {
+      const start = Math.max(0, i - half);
+      const end = Math.min(inputFrames.length - 1, i + half);
+      const count = end - start + 1;
+      for (let imu = 0; imu < N_IMU; imu++) {
+        let pSum = 0;
+        let rSum = 0;
+        for (let j = start; j <= end; j++) {
+          pSum += inputFrames[j].pitch[imu];
+          rSum += inputFrames[j].roll[imu];
+        }
+        output[i].pitch[imu] = pSum / count;
+        output[i].roll[imu] = rSum / count;
+      }
+    }
+    return output;
+  }
+
+  function rebuildFrames() {
+    stopPlayback();
+    if (!rawRows.length) {
+      frames = [];
+      stats = null;
+      currentIndex = 0;
+      drawAll();
+      return;
+    }
+
+    const t0 = rawRows[0].timeMs;
+    const mapped = rawRows.map((row) => {
+      const angles = getMappedAngles(row);
+      return {
+        timeMs: row.timeMs,
+        timeSec: (row.timeMs - t0) / 1000,
+        pitch: angles.pitch,
+        roll: angles.roll
+      };
+    });
+
+    const baselineN = clamp(Number(els.baselineCount.value) || 1, 1, mapped.length);
+    const baselinePitch = new Array(N_IMU).fill(0);
+    const baselineRoll = new Array(N_IMU).fill(0);
+    if (els.removeBaseline.checked) {
+      for (let imu = 0; imu < N_IMU; imu++) {
+        baselinePitch[imu] = median(mapped.slice(0, baselineN).map((frame) => frame.pitch[imu]));
+        baselineRoll[imu] = median(mapped.slice(0, baselineN).map((frame) => frame.roll[imu]));
+      }
+    }
+
+    frames = mapped.map((frame) => ({
+      timeMs: frame.timeMs,
+      timeSec: frame.timeSec,
+      pitch: frame.pitch.map((v, i) => v - baselinePitch[i]),
+      roll: frame.roll.map((v, i) => v - baselineRoll[i])
+    }));
+
+    frames = smoothFrames(frames, clamp(Number(els.smoothWindow.value) || 1, 1, 101));
+    currentIndex = clamp(currentIndex, 0, frames.length - 1);
+    els.timeSlider.disabled = false;
+    els.timeSlider.min = "0";
+    els.timeSlider.max = String(frames.length - 1);
+    els.timeSlider.value = String(currentIndex);
+    els.playButton.disabled = false;
+    imuCalibration = computeBendCalibration(frames);
+    stats = computeStats(frames);
+    updateTimeLabel();
+    drawAll();
+
+    const duration = frames.length ? frames[frames.length - 1].timeSec : 0;
+    let message = `Loaded ${frames.length} samples from ${currentFileName} (${duration.toFixed(1)} s). Baseline uses ${baselineN} samples.`;
+    if (factoryData) {
+      message += ` Factory bend envelope uses ${factoryData.loadsKg.length} loads from ${currentFactoryFileName}.`;
+      if (imuCalibration.applied) {
+        if (imuCalibration.mode === "field") {
+          message += ` Field calibration maps ${imuCalibration.standFrames} standing frames to ${format(imuCalibration.standLoadKg, 1)} kg and ${imuCalibration.stompFrames} stomp frames to ${format(imuCalibration.stompLoadKg, 1)} kg.`;
+          if (imuCalibration.clippedFrames > 0) message += ` ${imuCalibration.clippedFrames} frames are clamped to the factory load range.`;
+        } else {
+          message += ` IMU bending is scaled ${format(imuCalibration.scale, 2)}x so the ${format(imuCalibration.percentile, 1)}th percentile shape match reaches ${format(imuCalibration.actualLoadKg, 1)} kg.`;
+          if (imuCalibration.clippedFrames > 0) message += ` ${imuCalibration.clippedFrames} spike frames are capped at the target-load shape.`;
+        }
+      } else {
+        message += " Add valid standing/stomp intervals to enable field load calibration, or use the fallback target calibration.";
+      }
+    }
+    if (stats && stats.maxFlatClip > 0.001) {
+      if (factoryData) {
+        message += ` Filtered peaks request up to ${format(stats.maxFlatClip * 1000, 1)} mm beyond the target-load profile, worst at ${format(stats.maxFlatClipTimeSec, 3)} s.`;
+      } else {
+        message += ` Warning: pitch reconstruction demands ${format(stats.maxFlatClip * 1000, 1)} mm past flat underside, worst at ${format(stats.maxFlatClipTimeSec, 3)} s. The side shape is soft-limited.`;
+      }
+    }
+    setStatus(message);
+  }
+
+  function interpImuToGrid(values) {
+    const sortedX = imuOrder.map((idx) => IMU_POS_ABS[idx]);
+    const sortedV = imuOrder.map((idx) => values[idx]);
+    const out = new Array(GRID_N);
+    let seg = 0;
+    for (let j = 0; j < GRID_N; j++) {
+      const x = xGrid[j];
+      if (x <= sortedX[0]) { out[j] = sortedV[0]; continue; }
+      if (x >= sortedX[sortedX.length - 1]) { out[j] = sortedV[sortedV.length - 1]; continue; }
+      while (seg < sortedX.length - 2 && x > sortedX[seg + 1]) seg++;
+      const t = (x - sortedX[seg]) / (sortedX[seg + 1] - sortedX[seg]);
+      out[j] = lerp(sortedV[seg], sortedV[seg + 1], t);
+    }
+    return out;
+  }
+
+  function interpAt(gridValues, x) {
+    const pos = clamp(x / L_M, 0, 1) * (GRID_N - 1);
+    const i = Math.floor(pos);
+    const t = pos - i;
+    if (i >= GRID_N - 1) return gridValues[GRID_N - 1];
+    return lerp(gridValues[i], gridValues[i + 1], t);
+  }
+
+  function gradient(values) {
+    const out = new Array(values.length).fill(0);
+    for (let i = 0; i < values.length; i++) {
+      if (i === 0) out[i] = Math.abs((values[1] - values[0]) / (xGrid[1] - xGrid[0]));
+      else if (i === values.length - 1) out[i] = Math.abs((values[i] - values[i - 1]) / (xGrid[i] - xGrid[i - 1]));
+      else out[i] = Math.abs((values[i + 1] - values[i - 1]) / (xGrid[i + 1] - xGrid[i - 1]));
+    }
+    return out;
+  }
+
+  function integratePitchGrid(pitchGrid) {
+    const y = new Array(GRID_N).fill(0);
+    for (let i = 1; i < GRID_N; i++) {
+      const dx = xGrid[i] - xGrid[i - 1];
+      const thetaDeg = 0.5 * (pitchGrid[i - 1] + pitchGrid[i]);
+      const thetaRad = clamp(thetaDeg * Math.PI / 180, -Math.PI / 3, Math.PI / 3);
+      y[i] = y[i - 1] + Math.tan(thetaRad) * dx;
+    }
+    if (els.anchorTips.checked && y.length > 1) {
+      const start = y[0];
+      const end = y[y.length - 1];
+      for (let i = 0; i < y.length; i++) y[i] -= lerp(start, end, i / (y.length - 1));
+    }
+    return y;
+  }
+
+  function defaultCalibration() {
+    return {
+      applied: false,
+      mode: "none",
+      scale: 1,
+      targetLoadKg: clamp(Number(els.targetLoad.value) || 49.6, 0, 200),
+      actualLoadKg: null,
+      percentile: clamp(Number(els.outlierPercentile.value) || 99.5, 90, 100),
+      robustMaxM: 0,
+      targetMaxM: 0,
+      clippedFrames: 0,
+      sign: 1,
+      lowerGrid: null,
+      upperGrid: null,
+      targetGrid: null,
+      targetFlatteningGrid: null,
+      loadOffset: 0,
+      loadPerCoefficient: 0,
+      refFlatteningGrid: null,
+      standLoadKg: clamp(Number(els.standLoad.value) || 40, 0, 160),
+      stompLoadKg: clamp(Number(els.stompLoad.value) || 80, 0, 160),
+      standCoeff: 0,
+      stompCoeff: 0,
+      standFrames: 0,
+      stompFrames: 0
+    };
+  }
+
+  function optionalNumber(el) {
+    const value = Number(el.value);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function intervalFrames(sourceFrames, startEl, endEl) {
+    const start = optionalNumber(startEl);
+    const end = optionalNumber(endEl);
+    if (start === null || end === null || end <= start) return [];
+    return sourceFrames.filter((frame) => frame.timeSec >= start && frame.timeSec <= end);
+  }
+
+  function closestFactoryLoadIndex(targetKg) {
+    if (!factoryData || !factoryData.loadsKg.length) return -1;
+    let best = 0;
+    for (let i = 1; i < factoryData.loadsKg.length; i++) {
+      if (Math.abs(factoryData.loadsKg[i] - targetKg) < Math.abs(factoryData.loadsKg[best] - targetKg)) best = i;
+    }
+    return best;
+  }
+
+  function detrendOverMeasuredSpan(grid) {
+    const y0 = interpAt(grid, MEASURED_X_MIN);
+    const y1 = interpAt(grid, MEASURED_X_MAX);
+    return grid.map((y, i) => {
+      const x = xGrid[i];
+      const t = (x - MEASURED_X_MIN) / (MEASURED_X_MAX - MEASURED_X_MIN || 1);
+      return y - lerp(y0, y1, t);
+    });
+  }
+
+  function bendCoefficientFromDeflection(yDeflection, targetFlatteningGrid, sign = 1) {
+    const detrended = detrendOverMeasuredSpan(yDeflection);
+    let dot = 0;
+    let norm = 0;
+    for (let i = 0; i < GRID_N; i++) {
+      const x = xGrid[i];
+      if (x < MEASURED_X_MIN || x > MEASURED_X_MAX) continue;
+      if (factoryData && (x < factoryData.xMin || x > factoryData.xMax)) continue;
+      const target = targetFlatteningGrid[i];
+      if (target <= 1e-5) continue;
+      const imuFlattening = -detrended[i] * sign;
+      dot += imuFlattening * target;
+      norm += target * target;
+    }
+    return norm > 1e-12 ? Math.max(0, dot / norm) : 0;
+  }
+
+  function frameBendCoefficient(frame, targetFlatteningGrid, sign = 1) {
+    const pitchGrid = interpImuToGrid(frame.pitch);
+    return bendCoefficientFromDeflection(integratePitchGrid(pitchGrid), targetFlatteningGrid, sign);
+  }
+
+  function medianCoefficient(framesInInterval, refFlatteningGrid, sign) {
+    return median(framesInInterval.map((frame) => frameBendCoefficient(frame, refFlatteningGrid, sign)));
+  }
+
+  function computeFieldLoadCalibration(sourceFrames) {
+    const calibration = defaultCalibration();
+    if (!factoryData || !sourceFrames.length) return calibration;
+
+    const standFrames = intervalFrames(sourceFrames, els.standStart, els.standEnd);
+    const stompFrames = intervalFrames(sourceFrames, els.stompStart, els.stompEnd);
+    if (!standFrames.length || !stompFrames.length || Math.abs(calibration.stompLoadKg - calibration.standLoadKg) < 1e-6) {
+      return calibration;
+    }
+
+    const refLoadKg = Math.max(calibration.standLoadKg, calibration.stompLoadKg);
+    const refFlatteningGrid = factoryFlatteningGridForLoad(refLoadKg);
+    const targetGrid = factoryGridAtLoad(refLoadKg);
+    const unloadedGrid = factoryData.unloadedGrid || xGrid.map(baselineBottomAt);
+    let targetMaxM = 0;
+    for (let i = 0; i < GRID_N; i++) {
+      const x = xGrid[i];
+      if (x < MEASURED_X_MIN || x > MEASURED_X_MAX || x < factoryData.xMin || x > factoryData.xMax) continue;
+      targetMaxM = Math.max(targetMaxM, refFlatteningGrid[i]);
+    }
+    if (targetMaxM <= 1e-6) return calibration;
+
+    const positiveStand = medianCoefficient(standFrames, refFlatteningGrid, 1);
+    const positiveStomp = medianCoefficient(stompFrames, refFlatteningGrid, 1);
+    const negativeStand = medianCoefficient(standFrames, refFlatteningGrid, -1);
+    const negativeStomp = medianCoefficient(stompFrames, refFlatteningGrid, -1);
+    const positiveDelta = positiveStomp - positiveStand;
+    const negativeDelta = negativeStomp - negativeStand;
+    const sign = negativeDelta > positiveDelta ? -1 : 1;
+    const standCoeff = sign < 0 ? negativeStand : positiveStand;
+    const stompCoeff = sign < 0 ? negativeStomp : positiveStomp;
+    const coeffDelta = stompCoeff - standCoeff;
+    if (Math.abs(coeffDelta) < 1e-6) return calibration;
+
+    calibration.applied = true;
+    calibration.mode = "field";
+    calibration.sign = sign;
+    calibration.scale = 1;
+    calibration.actualLoadKg = refLoadKg;
+    calibration.targetLoadKg = refLoadKg;
+    calibration.targetMaxM = targetMaxM;
+    calibration.lowerGrid = factoryData.lowerGrid;
+    calibration.upperGrid = factoryData.upperGrid;
+    calibration.targetGrid = targetGrid;
+    calibration.targetFlatteningGrid = refFlatteningGrid;
+    calibration.refFlatteningGrid = refFlatteningGrid;
+    calibration.loadPerCoefficient = (calibration.stompLoadKg - calibration.standLoadKg) / coeffDelta;
+    calibration.loadOffset = calibration.standLoadKg - calibration.loadPerCoefficient * standCoeff;
+    calibration.standCoeff = standCoeff;
+    calibration.stompCoeff = stompCoeff;
+    calibration.standFrames = standFrames.length;
+    calibration.stompFrames = stompFrames.length;
+    calibration.clippedFrames = sourceFrames.filter((frame) => {
+      const coeff = frameBendCoefficient(frame, refFlatteningGrid, sign);
+      const load = calibration.loadOffset + calibration.loadPerCoefficient * coeff;
+      return load < factoryData.loadMinKg || load > factoryData.loadMaxKg;
+    }).length;
+    return calibration;
+  }
+
+  function computeBendCalibration(sourceFrames) {
+    const fieldCalibration = computeFieldLoadCalibration(sourceFrames);
+    if (fieldCalibration.applied) return fieldCalibration;
+
+    const calibration = defaultCalibration();
+    if (!factoryData || !sourceFrames.length) return calibration;
+
+    const targetIndex = closestFactoryLoadIndex(calibration.targetLoadKg);
+    if (targetIndex < 0) return calibration;
+
+    const unloaded = factoryData.profiles[factoryData.unloadedIndex];
+    const target = factoryData.profiles[targetIndex];
+    const unloadedGrid = xGrid.map((x) => factoryProfileAtFrom(factoryData, unloaded, x, camberAt(x)));
+    const targetGrid = xGrid.map((x) => factoryProfileAtFrom(factoryData, target, x, unloadedGrid[Math.round(clamp(x / L_M, 0, 1) * (GRID_N - 1))]));
+    const lowerGrid = unloadedGrid.map((y, i) => Math.min(y, targetGrid[i]));
+    const upperGrid = unloadedGrid.map((y, i) => Math.max(y, targetGrid[i]));
+    const targetFlatteningGrid = detrendOverMeasuredSpan(unloadedGrid.map((y, i) => y - targetGrid[i]));
+
+    let targetMaxM = 0;
+    for (let i = 0; i < GRID_N; i++) {
+      const x = xGrid[i];
+      if (x < MEASURED_X_MIN || x > MEASURED_X_MAX || x < factoryData.xMin || x > factoryData.xMax) continue;
+      targetMaxM = Math.max(targetMaxM, targetFlatteningGrid[i]);
+    }
+
+    const positiveCoefficients = sourceFrames.map((frame) => frameBendCoefficient(frame, targetFlatteningGrid, 1));
+    const negativeCoefficients = sourceFrames.map((frame) => frameBendCoefficient(frame, targetFlatteningGrid, -1));
+    const robustPositive = percentileValue(positiveCoefficients, calibration.percentile);
+    const robustNegative = percentileValue(negativeCoefficients, calibration.percentile);
+    const sign = robustNegative > robustPositive ? -1 : 1;
+    const coefficients = sign < 0 ? negativeCoefficients : positiveCoefficients;
+    const robustCoefficient = percentileValue(coefficients, calibration.percentile);
+    if (targetMaxM > 1e-6 && robustCoefficient > 1e-6) {
+      calibration.applied = true;
+      calibration.mode = "fallback";
+      calibration.actualLoadKg = factoryData.loadsKg[targetIndex];
+      calibration.scale = 1 / robustCoefficient;
+      calibration.robustMaxM = robustCoefficient * targetMaxM;
+      calibration.targetMaxM = targetMaxM;
+      calibration.clippedFrames = coefficients.filter((value) => value * calibration.scale > 1.02).length;
+      calibration.sign = sign;
+      calibration.lowerGrid = lowerGrid;
+      calibration.upperGrid = upperGrid;
+      calibration.targetGrid = targetGrid;
+      calibration.targetFlatteningGrid = targetFlatteningGrid;
+    }
+    return calibration;
+  }
+
+  function getFrameSeries(index) {
+    const frame = frames[index] || {
+      pitch: new Array(N_IMU).fill(0), roll: new Array(N_IMU).fill(0), timeSec: 0, timeMs: 0
+    };
+    const pitchGrid = interpImuToGrid(frame.pitch);
+    const rollGrid = interpImuToGrid(frame.roll);
+    return {
+      frame,
+      pitchGrid,
+      rollGrid,
+      bendRate: gradient(pitchGrid),
+      torsionRate: gradient(rollGrid),
+      yDeflection: integratePitchGrid(pitchGrid)
+    };
+  }
+
+  function emptyStats() {
+    const make = () => ({ mean: new Array(GRID_N).fill(0), rms: new Array(GRID_N).fill(0), max: new Array(GRID_N).fill(0), globalMax: 0 });
+    return { bend: make(), torsion: make(), minDeflection: 0, maxDeflection: 0, maxFlatClip: 0, maxFlatClipTimeSec: 0, maxCamberClip: 0 };
+  }
+
+  function computeStats(sourceFrames) {
+    const out = emptyStats();
+    if (!sourceFrames.length) return out;
+    const bendSum = new Array(GRID_N).fill(0);
+    const bendSq = new Array(GRID_N).fill(0);
+    const torsionSum = new Array(GRID_N).fill(0);
+    const torsionSq = new Array(GRID_N).fill(0);
+    let minDeflection = Infinity;
+    let maxDeflection = -Infinity;
+    let maxFlatClip = 0;
+    let maxFlatClipTimeSec = 0;
+    let maxCamberClip = 0;
+
+    for (const frame of sourceFrames) {
+      const pitchGrid = interpImuToGrid(frame.pitch);
+      const rollGrid = interpImuToGrid(frame.roll);
+      const bendRate = gradient(pitchGrid);
+      const torsionRate = gradient(rollGrid);
+      const deflection = integratePitchGrid(pitchGrid);
+      const shape = constrainedSideShape(deflection, 1);
+      if (shape.maxFlatClip > maxFlatClip) {
+        maxFlatClip = shape.maxFlatClip;
+        maxFlatClipTimeSec = frame.timeSec;
+      }
+      maxCamberClip = Math.max(maxCamberClip, shape.maxCamberClip);
+      for (let i = 0; i < GRID_N; i++) {
+        const b = bendRate[i];
+        const t = torsionRate[i];
+        bendSum[i] += b;
+        bendSq[i] += b * b;
+        torsionSum[i] += t;
+        torsionSq[i] += t * t;
+        out.bend.max[i] = Math.max(out.bend.max[i], b);
+        out.torsion.max[i] = Math.max(out.torsion.max[i], t);
+        minDeflection = Math.min(minDeflection, deflection[i]);
+        maxDeflection = Math.max(maxDeflection, deflection[i]);
+      }
+    }
+
+    const count = sourceFrames.length;
+    for (let i = 0; i < GRID_N; i++) {
+      out.bend.mean[i] = bendSum[i] / count;
+      out.bend.rms[i] = Math.sqrt(bendSq[i] / count);
+      out.torsion.mean[i] = torsionSum[i] / count;
+      out.torsion.rms[i] = Math.sqrt(torsionSq[i] / count);
+      out.bend.globalMax = Math.max(out.bend.globalMax, out.bend.max[i], out.bend.rms[i], out.bend.mean[i]);
+      out.torsion.globalMax = Math.max(out.torsion.globalMax, out.torsion.max[i], out.torsion.rms[i], out.torsion.mean[i]);
+    }
+    out.minDeflection = Number.isFinite(minDeflection) ? minDeflection : 0;
+    out.maxDeflection = Number.isFinite(maxDeflection) ? maxDeflection : 0;
+    out.maxFlatClip = Number.isFinite(maxFlatClip) ? maxFlatClip : 0;
+    out.maxFlatClipTimeSec = Number.isFinite(maxFlatClipTimeSec) ? maxFlatClipTimeSec : 0;
+    out.maxCamberClip = Number.isFinite(maxCamberClip) ? maxCamberClip : 0;
+    return out;
+  }
+
+  function heatValues(kind, currentSeries) {
+    const mode = els.heatMode.value;
+    if (mode === "current") return kind === "bend" ? currentSeries.bendRate : currentSeries.torsionRate;
+    if (!stats) return new Array(GRID_N).fill(0);
+    return stats[kind][mode] || stats[kind].rms;
+  }
+
+  function getHeatMax(kind) {
+    if (!stats) return 1;
+    const maxValue = kind === "bend" ? stats.bend.globalMax : stats.torsion.globalMax;
+    return Math.max(1e-6, maxValue);
+  }
+
+  function heatColor(value, maxValue) {
+    const t = clamp(value / (maxValue || 1), 0, 1);
+    const stops = [
+      { t: 0.00, c: [238, 243, 242] }, { t: 0.18, c: [115, 199, 175] },
+      { t: 0.40, c: [65, 145, 190] }, { t: 0.68, c: [248, 211, 88] },
+      { t: 1.00, c: [205, 63, 60] }
+    ];
+    for (let i = 0; i < stops.length - 1; i++) {
+      const a = stops[i];
+      const b = stops[i + 1];
+      if (t >= a.t && t <= b.t) {
+        const local = (t - a.t) / (b.t - a.t);
+        const r = Math.round(lerp(a.c[0], b.c[0], local));
+        const g = Math.round(lerp(a.c[1], b.c[1], local));
+        const blue = Math.round(lerp(a.c[2], b.c[2], local));
+        return `rgb(${r}, ${g}, ${blue})`;
+      }
+    }
+    return "rgb(205, 63, 60)";
+  }
+
+  function prepareCanvas(canvas) {
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    return { ctx, width, height };
+  }
+
+  function drawText(ctx, text, x, y, options = {}) {
+    ctx.save();
+    ctx.fillStyle = options.color || "#2d363f";
+    ctx.font = options.font || "12px Segoe UI, Arial, sans-serif";
+    ctx.textAlign = options.align || "left";
+    ctx.textBaseline = options.baseline || "alphabetic";
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+
+  function drawLegend(ctx, x, y, width, height, maxValue, label) {
+    const steps = Math.max(1, Math.floor(width));
+    for (let i = 0; i < steps; i++) {
+      const t = i / Math.max(1, steps - 1);
+      ctx.fillStyle = heatColor(t * maxValue, maxValue);
+      ctx.fillRect(x + i, y, 1, height);
+    }
+    ctx.strokeStyle = "#80909f";
+    ctx.strokeRect(x, y, width, height);
+    drawText(ctx, "0", x, y + height + 14, { color: "#66707c" });
+    drawText(ctx, format(maxValue, 1), x + width, y + height + 14, { color: "#66707c", align: "right" });
+    drawText(ctx, label, x, y - 5, { color: "#66707c" });
+  }
+
+  function drawAxes(ctx, plot, xLabel, yLabel) {
+    ctx.strokeStyle = "#b8c3cc";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(plot.left, plot.bottom);
+    ctx.lineTo(plot.right, plot.bottom);
+    ctx.lineTo(plot.right, plot.top);
+    ctx.stroke();
+    drawText(ctx, xLabel, (plot.left + plot.right) / 2, plot.bottom + 34, { align: "center", color: "#66707c" });
+    drawText(ctx, yLabel, plot.left - 36, plot.top + 8, { color: "#66707c" });
+  }
+
+  function drawSideProfile() {
+    const { ctx, width, height } = prepareCanvas(els.sideCanvas);
+    const series = getFrameSeries(currentIndex);
+    const bendScale = Number(els.bendScale.value) || 1;
+    const plot = { left: 54, right: width - 20, top: 24, bottom: height - 48 };
+    const xMin = MEASURED_X_MIN;
+    const xMax = MEASURED_X_MAX;
+    const profileXs = measuredProfileXs();
+    const baselineTopGrid = xGrid.map(baselineTopAt);
+    const baselineBottomGrid = xGrid.map(baselineBottomAt);
+    const currentShape = constrainedSideShape(series.yDeflection, bendScale);
+    const baselineTop = profileXs.map((x) => interpAt(baselineTopGrid, x));
+    const baselineBottom = profileXs.map((x) => interpAt(baselineBottomGrid, x));
+    const limitBottom = profileXs.map((x) => interpAt(currentShape.lower, x));
+    const currentTop = profileXs.map((x) => interpAt(currentShape.top, x));
+    const currentBottom = profileXs.map((x) => interpAt(currentShape.bottom, x));
+    const visibleFlatClip = Math.max(...profileXs.map((x) => Math.max(0, interpAt(currentShape.lower, x) - interpAt(currentShape.rawBottom, x))));
+
+    let yMin = Math.min(0, ...baselineBottom, ...currentBottom, ...limitBottom);
+    let yMax = Math.max(...baselineTop, ...currentTop);
+    const pad = Math.max(0.015, (yMax - yMin) * 0.18);
+    yMin -= pad;
+    yMax += pad;
+
+    const sx = (x) => plot.left + ((x - xMin) / (xMax - xMin || 1)) * (plot.right - plot.left);
+    const xScale = (plot.right - plot.left) / (xMax - xMin || 1);
+    const fitScale = (plot.bottom - plot.top) / (yMax - yMin || 1);
+    const yScale = Math.min(xScale * SIDE_VIEW_VERTICAL_EXAGGERATION, fitScale * 0.92);
+    const yCenter = 0.5 * (yMin + yMax);
+    const plotCenterY = 0.5 * (plot.top + plot.bottom);
+    const sy = (y) => plotCenterY - (y - yCenter) * yScale;
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = "#e2e8ed";
+    ctx.lineWidth = 1;
+    const gridStep = 0.025;
+    const firstGrid = Math.ceil(yMin / gridStep) * gridStep;
+    for (let yM = firstGrid; yM <= yMax + 1e-9; yM += gridStep) {
+      const y = sy(yM);
+      ctx.beginPath();
+      ctx.moveTo(plot.left, y);
+      ctx.lineTo(plot.right, y);
+      ctx.stroke();
+      if (Math.abs(yM) > 1e-9) {
+        drawText(ctx, `${format(yM * 1000, 0)}`, plot.left - 8, y + 4, { align: "right", color: "#8a96a1" });
+      }
+    }
+
+    ctx.strokeStyle = "#8c969f";
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(plot.left, sy(0));
+    ctx.lineTo(plot.right, sy(0));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = "#9ba6af";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    baselineTop.forEach((y, i) => i ? ctx.lineTo(sx(profileXs[i]), sy(y)) : ctx.moveTo(sx(profileXs[i]), sy(y)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = "#d59b1d";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath();
+    limitBottom.forEach((y, i) => i ? ctx.lineTo(sx(profileXs[i]), sy(y)) : ctx.moveTo(sx(profileXs[i]), sy(y)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.beginPath();
+    currentTop.forEach((y, i) => i ? ctx.lineTo(sx(profileXs[i]), sy(y)) : ctx.moveTo(sx(profileXs[i]), sy(y)));
+    for (let i = currentBottom.length - 1; i >= 0; i--) ctx.lineTo(sx(profileXs[i]), sy(currentBottom[i]));
+    ctx.closePath();
+    ctx.fillStyle = "rgba(21,143,136,.16)";
+    ctx.fill();
+    ctx.strokeStyle = "#158f88";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+
+    ctx.fillStyle = "#1d2329";
+    for (let i = 0; i < N_IMU; i++) {
+      const x = IMU_POS_ABS[i];
+      const y = interpAt(currentShape.top, x);
+      ctx.beginPath();
+      ctx.arc(sx(x), sy(y), 4, 0, Math.PI * 2);
+      ctx.fill();
+      drawText(ctx, String(i), sx(x), sy(y) - 8, { align: "center", color: "#1d2329" });
+    }
+
+    drawAxes(ctx, plot, "position from back tip [m]", "height [mm]");
+    drawText(ctx, `vertical ${format(yScale / xScale, 1)}x`, plot.left, plot.top, { color: "#66707c" });
+    drawText(ctx, "cut at IMU0 / IMU7", plot.left + 105, plot.top, { color: "#66707c" });
+    const limitLabel = imuCalibration.mode === "field" ? "field load map" : (imuCalibration.applied ? `${format(imuCalibration.actualLoadKg, 1)} kg target cap` : (factoryData ? "factory load envelope" : "flat underside limit"));
+    const clipLabel = imuCalibration.mode === "field" && currentShape.estimatedLoadKg !== null ? `estimated ${format(currentShape.estimatedLoadKg, 1)} kg` : (imuCalibration.applied ? `filtered peak ${format(visibleFlatClip * 1000, 1)} mm` : `over-flat demand ${format(visibleFlatClip * 1000, 1)} mm`);
+    drawText(ctx, limitLabel, plot.left + 230, plot.top, { color: "#9b6b00" });
+    drawText(ctx, clipLabel, plot.left + 385, plot.top, { color: visibleFlatClip > 0.002 ? "#b14a27" : "#66707c" });
+    if (imuCalibration.applied) {
+      const calText = imuCalibration.mode === "field"
+        ? `factory profile from calibrated field load, ${format(currentShape.bendFactor * 100, 0)}% of factory range`
+        : `factory-shape bend ${format(currentShape.bendFactor * 100, 0)}%, IMU scale ${format(imuCalibration.scale, 2)}x`;
+      drawText(ctx, calText, plot.left, plot.top + 16, { color: "#66707c" });
+    }
+    drawText(ctx, `time ${format(series.frame.timeSec, 3)} s`, plot.right, plot.top, { align: "right", color: "#33404c", font: "13px Segoe UI, Arial, sans-serif" });
+  }
+
+  function drawLengthTicks(ctx, left, right, y, xMin = 0, xMax = L_M) {
+    ctx.strokeStyle = "#b8c3cc";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    const firstTick = Math.ceil(xMin / 0.3) * 0.3;
+    for (let m = firstTick; m <= xMax + 1e-9; m += 0.3) {
+      const x = left + ((m - xMin) / (xMax - xMin || 1)) * (right - left);
+      ctx.beginPath();
+      ctx.moveTo(x, y - 4);
+      ctx.lineTo(x, y + 4);
+      ctx.stroke();
+      drawText(ctx, format(m, 1), x, y + 18, { align: "center", color: "#66707c" });
+    }
+    drawText(ctx, "m from back tip", (left + right) / 2, y + 34, { align: "center", color: "#66707c" });
+  }
+
+  function drawTopHeat() {
+    const { ctx, width, height } = prepareCanvas(els.bendHeatCanvas);
+    const series = getFrameSeries(currentIndex);
+    const values = heatValues("bend", series);
+    const maxValue = getHeatMax("bend");
+    const plot = { left: 54, right: width - 20, top: 56, bottom: height - 82 };
+    const centerY = (plot.top + plot.bottom) / 2;
+    const xMin = MEASURED_X_MIN;
+    const xMax = MEASURED_X_MAX;
+    const topXs = [xMin, ...xGrid.filter((x) => x > xMin && x < xMax), xMax];
+    const sx = (x) => plot.left + ((x - xMin) / (xMax - xMin || 1)) * (plot.right - plot.left);
+    const xScale = (plot.right - plot.left) / (xMax - xMin || 1);
+    const halfW = (x) => 0.5 * widthAt(x) * xScale * TOP_VIEW_WIDTH_EXAGGERATION;
+    const maxHalfW = Math.max(...topXs.map(halfW));
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+    for (let i = 0; i < topXs.length - 1; i++) {
+      const x0 = topXs[i];
+      const x1 = topXs[i + 1];
+      const heat = interpAt(values, 0.5 * (x0 + x1));
+      ctx.fillStyle = heatColor(heat, maxValue);
+      ctx.beginPath();
+      ctx.moveTo(sx(x0), centerY - halfW(x0));
+      ctx.lineTo(sx(x1), centerY - halfW(x1));
+      ctx.lineTo(sx(x1), centerY + halfW(x1));
+      ctx.lineTo(sx(x0), centerY + halfW(x0));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = "#33404c";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    topXs.forEach((x, i) => i ? ctx.lineTo(sx(x), centerY - halfW(x)) : ctx.moveTo(sx(x), centerY - halfW(x)));
+    for (let i = topXs.length - 1; i >= 0; i--) ctx.lineTo(sx(topXs[i]), centerY + halfW(topXs[i]));
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(51,64,76,.38)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.moveTo(sx(xMin), centerY);
+    ctx.lineTo(sx(xMax), centerY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    drawText(ctx, "Cut at IMU0", sx(xMin) + 4, plot.top + 10, { color: "#66707c", font: "12px Segoe UI, Arial, sans-serif" });
+    drawText(ctx, "Cut at IMU7", sx(xMax) - 4, plot.top + 10, { align: "right", color: "#66707c", font: "12px Segoe UI, Arial, sans-serif" });
+    drawText(ctx, "Measured sensor span only", (sx(xMin) + sx(xMax)) / 2, plot.top + 10, { align: "center", color: "#66707c", font: "12px Segoe UI, Arial, sans-serif" });
+
+    for (let i = 0; i < N_IMU; i++) {
+      const x = IMU_POS_ABS[i];
+      ctx.strokeStyle = "#1d2329";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(sx(x), centerY - halfW(x));
+      ctx.lineTo(sx(x), centerY + halfW(x));
+      ctx.stroke();
+      drawText(ctx, String(i), sx(x), centerY + maxHalfW + 18, { align: "center", color: "#1d2329" });
+    }
+
+    drawLengthTicks(ctx, plot.left, plot.right, height - 44, xMin, xMax);
+    drawLegend(ctx, plot.left, height - 28, Math.min(220, plot.right - plot.left), 12, maxValue, "bend rate [deg/m]");
+    drawText(ctx, `heat: ${els.heatMode.options[els.heatMode.selectedIndex].text}`, plot.right, 24, { align: "right", color: "#66707c" });
+  }
+
+  function project3d(point, width, height, xMin = 0, xMax = L_M) {
+    const span = xMax - xMin || L_M;
+    const x = point.x - 0.5 * (xMin + xMax);
+    const y = point.y * TORSION_3D_HEIGHT_EXAGGERATION;
+    const z = point.z * TORSION_3D_WIDTH_EXAGGERATION;
+    const cy = Math.cos(view3d.yaw);
+    const sy = Math.sin(view3d.yaw);
+    const cp = Math.cos(view3d.pitch);
+    const sp = Math.sin(view3d.pitch);
+    const x1 = cy * x + sy * z;
+    const z1 = -sy * x + cy * z;
+    const y1 = cp * y - sp * z1;
+    const z2 = sp * y + cp * z1;
+    const dist = 5.0;
+    const perspective = dist / (dist + z2);
+    const scale = Math.min(width / (span * 1.24), height / 0.72);
+    return { x: width / 2 + x1 * scale * perspective, y: height * 0.47 - y1 * scale * perspective, depth: z2 };
+  }
+
+  function drawTorsion3d() {
+    const { ctx, width, height } = prepareCanvas(els.torsion3dCanvas);
+    const series = getFrameSeries(currentIndex);
+    const torsionScale = Number(els.torsionScale.value) || 1;
+    const maxValue = getHeatMax("torsion");
+    const neutralTopGrid = xGrid.map(baselineTopAt);
+    const xMin = MEASURED_X_MIN;
+    const xMax = MEASURED_X_MAX;
+    const xs = [xMin, ...xGrid.filter((x) => x > xMin && x < xMax), xMax];
+    const quads = [];
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+
+    const edgePoint = (x, side) => {
+      const y = interpAt(neutralTopGrid, x);
+      const half = widthAt(x) * 0.5;
+      const angle = clamp(interpAt(series.rollGrid, x) * torsionScale * Math.PI / 180, -TORSION_3D_MAX_TWIST_RAD, TORSION_3D_MAX_TWIST_RAD);
+      const localZ = side * half;
+      return { x, y: y + Math.sin(angle) * localZ, z: Math.cos(angle) * localZ };
+    };
+    const centerPoint = (x) => ({ x, y: interpAt(neutralTopGrid, x) + 0.001, z: 0 });
+    const projectMeasured = (point) => project3d(point, width, height, xMin, xMax);
+
+    for (let i = 0; i < xs.length - 1; i++) {
+      const x0 = xs[i];
+      const x1 = xs[i + 1];
+      const p0 = projectMeasured(edgePoint(x0, -1));
+      const p1 = projectMeasured(edgePoint(x1, -1));
+      const p2 = projectMeasured(edgePoint(x1, 1));
+      const p3 = projectMeasured(edgePoint(x0, 1));
+      quads.push({
+        pts: [p0, p1, p2, p3],
+        depth: (p0.depth + p1.depth + p2.depth + p3.depth) / 4,
+        color: heatColor(interpAt(series.torsionRate, 0.5 * (x0 + x1)), maxValue)
+      });
+    }
+
+    quads.sort((a, b) => b.depth - a.depth);
+    for (const quad of quads) {
+      ctx.beginPath();
+      ctx.moveTo(quad.pts[0].x, quad.pts[0].y);
+      for (let i = 1; i < quad.pts.length; i++) ctx.lineTo(quad.pts[i].x, quad.pts[i].y);
+      ctx.closePath();
+      ctx.fillStyle = quad.color;
+      ctx.globalAlpha = 0.84;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "rgba(42,50,56,.07)";
+      ctx.lineWidth = 0.35;
+      ctx.stroke();
+    }
+
+    const stroke3dPath = (points, style, lineWidth, dash = []) => {
+      ctx.save();
+      ctx.strokeStyle = style;
+      ctx.lineWidth = lineWidth;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      points.forEach((point, i) => i ? ctx.lineTo(point.x, point.y) : ctx.moveTo(point.x, point.y));
+      ctx.stroke();
+      ctx.restore();
+    };
+
+    stroke3dPath(xs.map((x) => projectMeasured(edgePoint(x, -1))), "rgba(39,54,63,.48)", 1.1);
+    stroke3dPath(xs.map((x) => projectMeasured(edgePoint(x, 1))), "rgba(39,54,63,.48)", 1.1);
+    stroke3dPath(xs.map((x) => projectMeasured(centerPoint(x))), "#1d2329", 1.3);
+    stroke3dPath([projectMeasured(edgePoint(xMin, -1)), projectMeasured(edgePoint(xMin, 1))], "rgba(39,54,63,.42)", 1);
+    stroke3dPath([projectMeasured(edgePoint(xMax, -1)), projectMeasured(edgePoint(xMax, 1))], "rgba(39,54,63,.42)", 1);
+
+    for (let i = 0; i < N_IMU; i++) {
+      const x = IMU_POS_ABS[i];
+      const p = projectMeasured(centerPoint(x));
+      ctx.fillStyle = "#1d2329";
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      drawText(ctx, String(i), p.x + 6, p.y - 4, { color: "#1d2329" });
+    }
+
+    drawLegend(ctx, 18, height - 28, Math.min(220, width - 36), 12, maxValue, "torsion rate [deg/m]");
+    drawText(ctx, "cut at IMU0 / IMU7", 18, 24, { color: "#66707c" });
+    drawText(ctx, `torsion ${format(torsionScale, 1)}x, pitch hidden`, 18, 42, { color: "#66707c" });
+    drawText(ctx, `time ${format(series.frame.timeSec, 3)} s`, width - 18, 24, { align: "right", color: "#33404c", font: "13px Segoe UI, Arial, sans-serif" });
+  }
+
+  function drawTorsionHeatSide() {
+    const { ctx, width, height } = prepareCanvas(els.torsionHeatCanvas);
+    const series = getFrameSeries(currentIndex);
+    const values = heatValues("torsion", series);
+    const maxValue = getHeatMax("torsion");
+    const bendScale = Number(els.bendScale.value) || 1;
+    const plot = { left: 54, right: width - 20, top: 38, bottom: height - 72 };
+    const xMin = MEASURED_X_MIN;
+    const xMax = MEASURED_X_MAX;
+    const profileXs = measuredProfileXs();
+    const useCurrentShape = els.heatMode.value === "current";
+    const sideShape = constrainedSideShape(series.yDeflection, bendScale);
+    const bottomGrid = useCurrentShape ? sideShape.bottom : xGrid.map(baselineBottomAt);
+    const topGrid = xGrid.map((x, i) => bottomGrid[i] + thicknessAt(x) * TORSION_HEAT_THICKNESS_EXAGGERATION);
+    const bottom = profileXs.map((x) => interpAt(bottomGrid, x));
+    const top = profileXs.map((x) => interpAt(topGrid, x));
+    let yMin = Math.min(0, ...bottom);
+    let yMax = Math.max(...top);
+    const pad = Math.max(0.015, (yMax - yMin) * 0.25);
+    yMin -= pad;
+    yMax += pad;
+
+    const sx = (x) => plot.left + ((x - xMin) / (xMax - xMin || 1)) * (plot.right - plot.left);
+    const xScale = (plot.right - plot.left) / (xMax - xMin || 1);
+    const fitScale = (plot.bottom - plot.top) / (yMax - yMin || 1);
+    const yScale = Math.min(xScale * SIDE_VIEW_VERTICAL_EXAGGERATION, fitScale * 0.92);
+    const yCenter = 0.5 * (yMin + yMax);
+    const plotCenterY = 0.5 * (plot.top + plot.bottom);
+    const sy = (y) => plotCenterY - (y - yCenter) * yScale;
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = "#e2e8ed";
+    ctx.lineWidth = 1;
+    const gridStep = 0.025;
+    const firstGrid = Math.ceil(yMin / gridStep) * gridStep;
+    for (let yM = firstGrid; yM <= yMax + 1e-9; yM += gridStep) {
+      const y = sy(yM);
+      ctx.beginPath();
+      ctx.moveTo(plot.left, y);
+      ctx.lineTo(plot.right, y);
+      ctx.stroke();
+    }
+
+    for (let i = 0; i < profileXs.length - 1; i++) {
+      const heat = interpAt(values, 0.5 * (profileXs[i] + profileXs[i + 1]));
+      ctx.fillStyle = heatColor(heat, maxValue);
+      ctx.beginPath();
+      ctx.moveTo(sx(profileXs[i]), sy(top[i]));
+      ctx.lineTo(sx(profileXs[i + 1]), sy(top[i + 1]));
+      ctx.lineTo(sx(profileXs[i + 1]), sy(bottom[i + 1]));
+      ctx.lineTo(sx(profileXs[i]), sy(bottom[i]));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.strokeStyle = "#33404c";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    top.forEach((y, i) => i ? ctx.lineTo(sx(profileXs[i]), sy(y)) : ctx.moveTo(sx(profileXs[i]), sy(y)));
+    for (let i = bottom.length - 1; i >= 0; i--) ctx.lineTo(sx(profileXs[i]), sy(bottom[i]));
+    ctx.closePath();
+    ctx.stroke();
+
+    for (let i = 0; i < N_IMU; i++) {
+      const x = IMU_POS_ABS[i];
+      const y = interpAt(topGrid, x);
+      ctx.fillStyle = "#1d2329";
+      ctx.beginPath();
+      ctx.arc(sx(x), sy(y), 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      drawText(ctx, String(i), sx(x), sy(y) - 8, { align: "center", color: "#1d2329" });
+    }
+
+    drawLengthTicks(ctx, plot.left, plot.right, height - 44, xMin, xMax);
+    drawLegend(ctx, plot.left, height - 28, Math.min(220, plot.right - plot.left), 12, maxValue, "torsion rate [deg/m]");
+    drawText(ctx, `vertical ${format(yScale / xScale, 1)}x, thickness ${format(TORSION_HEAT_THICKNESS_EXAGGERATION, 1)}x`, plot.left, 24, { color: "#66707c" });
+    drawText(ctx, `heat: ${els.heatMode.options[els.heatMode.selectedIndex].text}`, plot.right, 24, { align: "right", color: "#66707c" });
+  }
+
+  function drawFactoryPath(ctx, data, profile, sx, sy) {
+    ctx.beginPath();
+    for (let i = 0; i < data.xM.length; i++) {
+      const x = sx(data.xM[i]);
+      const y = sy(profile[i]);
+      if (i) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+    }
+  }
+
+  function drawFactoryArea(ctx, data, profile, unloaded, sx, sy) {
+    ctx.beginPath();
+    for (let i = 0; i < data.xM.length; i++) {
+      const x = sx(data.xM[i]);
+      const y = sy(profile[i]);
+      if (i) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+    }
+    for (let i = data.xM.length - 1; i >= 0; i--) ctx.lineTo(sx(data.xM[i]), sy(unloaded[i]));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function ensureFactoryCards() {
+    if (!factoryData) {
+      factoryProfileCanvases = [];
+      factoryCardsDirty = true;
+      els.factoryProfiles.innerHTML = `<div class="factory-empty">No factory CSV loaded.</div>`;
+      els.factoryNote.textContent = "Load the factory CSV to draw one measured underside profile for each load. The unloaded ski is drawn translucent behind each loaded profile.";
+      return;
+    }
+    if (factoryProfileCanvases.length === factoryData.loadsKg.length) return;
+    els.factoryProfiles.innerHTML = factoryData.loadsKg.map((load, i) => {
+      const suffix = i === factoryData.unloadedIndex ? " unloaded reference" : "";
+      return `<div class="factory-card"><h3>${format(load, 1)} kg${suffix}</h3><canvas class="factory-canvas"></canvas></div>`;
+    }).join("");
+    factoryProfileCanvases = Array.from(els.factoryProfiles.querySelectorAll("canvas"));
+    factoryCardsDirty = true;
+  }
+
+  function drawFactoryLoadPlot(canvas, loadIndex) {
+    const { ctx, width, height } = prepareCanvas(canvas);
+    const data = factoryData;
+    const unloaded = data.profiles[data.unloadedIndex];
+    const profile = data.profiles[loadIndex];
+    const plot = { left: 42, right: width - 12, top: 22, bottom: height - 34 };
+    const yMin = Math.min(0, data.yMinM);
+    const yMax = Math.max(0.012, data.yMaxM * 1.08);
+    const sx = (x) => plot.left + ((x - data.xMin) / (data.xMax - data.xMin || 1)) * (plot.right - plot.left);
+    const sy = (y) => plot.bottom - ((y - yMin) / (yMax - yMin || 1)) * (plot.bottom - plot.top);
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.strokeStyle = "#edf2f5";
+    ctx.lineWidth = 1;
+    const yStep = 0.010;
+    for (let y = 0; y <= yMax + 1e-9; y += yStep) {
+      const py = sy(y);
+      ctx.beginPath();
+      ctx.moveTo(plot.left, py);
+      ctx.lineTo(plot.right, py);
+      ctx.stroke();
+      drawText(ctx, format(y * 1000, 0), plot.left - 6, py + 4, { align: "right", color: "#8a96a1" });
+    }
+    for (let x = Math.ceil(data.xMin / 0.3) * 0.3; x <= data.xMax + 1e-9; x += 0.3) {
+      const px = sx(x);
+      ctx.beginPath();
+      ctx.moveTo(px, plot.top);
+      ctx.lineTo(px, plot.bottom);
+      ctx.stroke();
+      drawText(ctx, format(x, 1), px, plot.bottom + 15, { align: "center", color: "#8a96a1" });
+    }
+
+    ctx.strokeStyle = "#8794a0";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(plot.left, sy(0));
+    ctx.lineTo(plot.right, sy(0));
+    ctx.stroke();
+
+    if (data.loadPointXM >= data.xMin && data.loadPointXM <= data.xMax) {
+      const loadX = sx(data.loadPointXM);
+      ctx.save();
+      ctx.strokeStyle = "#9b6b00";
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(loadX, plot.top);
+      ctx.lineTo(loadX, plot.bottom);
+      ctx.stroke();
+      ctx.restore();
+      drawText(ctx, "load +140 mm", loadX + 4, plot.top + 12, { color: "#9b6b00" });
+    }
+
+    ctx.fillStyle = "rgba(21,143,136,.12)";
+    drawFactoryArea(ctx, data, profile, unloaded, sx, sy);
+
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = "#66707c";
+    ctx.lineWidth = 4;
+    drawFactoryPath(ctx, data, unloaded, sx, sy);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.strokeStyle = "#158f88";
+    ctx.lineWidth = 2.2;
+    drawFactoryPath(ctx, data, profile, sx, sy);
+    ctx.stroke();
+
+    drawText(ctx, "back", plot.left, plot.bottom + 30, { color: "#66707c" });
+    drawText(ctx, "front", plot.right, plot.bottom + 30, { align: "right", color: "#66707c" });
+    drawText(ctx, "height [mm]", plot.left, 14, { color: "#66707c" });
+    drawText(ctx, `load ${format(data.loadsKg[loadIndex], 1)} kg`, plot.right, 14, { align: "right", color: "#33404c", font: "13px Segoe UI, Arial, sans-serif" });
+  }
+
+  function drawFactoryProfiles() {
+    ensureFactoryCards();
+    if (!factoryData) return;
+    const targetIndex = closestFactoryLoadIndex(clamp(Number(els.targetLoad.value) || 49.6, 0, 200));
+    const targetText = targetIndex >= 0 ? ` IMU calibration target: ${format(factoryData.loadsKg[targetIndex], 1)} kg.` : "";
+    els.factoryNote.textContent = `Loaded ${factoryData.loadsKg.length} factory load profiles from ${currentFactoryFileName}. Axis is converted from balance-point distance to back-to-front ski position; the +140 mm load point is marked. The y-values are the measured underside height in millimeters, with the same vertical scale for every load plot.${targetText}`;
+    const layoutWidth = Math.round(els.factoryProfiles.getBoundingClientRect().width);
+    const needsRedraw = factoryCardsDirty || layoutWidth !== factoryLayoutWidth || factoryProfileCanvases.some((canvas) => !canvas.width || !canvas.height);
+    if (!needsRedraw) return;
+    for (let i = 0; i < factoryProfileCanvases.length; i++) drawFactoryLoadPlot(factoryProfileCanvases[i], i);
+    factoryCardsDirty = false;
+    factoryLayoutWidth = layoutWidth;
+  }
+
+  function updateFieldCalibrationNote() {
+    if (!factoryData || !frames.length) {
+      els.fieldCalNote.textContent = "Load both a TXT log and the factory CSV, then mark standing and stomp intervals.";
+      return;
+    }
+    if (imuCalibration.mode === "field") {
+      els.fieldCalNote.textContent = `Active field calibration: standing interval uses ${imuCalibration.standFrames} frames at ${format(imuCalibration.standLoadKg, 1)} kg, stomp interval uses ${imuCalibration.stompFrames} frames at ${format(imuCalibration.stompLoadKg, 1)} kg. The side view interpolates factory profiles from the estimated load at each time.`;
+      return;
+    }
+    const standFrames = intervalFrames(frames, els.standStart, els.standEnd).length;
+    const stompFrames = intervalFrames(frames, els.stompStart, els.stompEnd).length;
+    if (!standFrames || !stompFrames) {
+      els.fieldCalNote.textContent = "Field calibration is inactive. Enter standing and stomp intervals, or move the time slider and use the Start/End buttons.";
+    } else {
+      els.fieldCalNote.textContent = "Field calibration intervals were found, but the IMU shape difference was too small or inconsistent to map load.";
+    }
+  }
+
+  function updateTable() {
+    if (!frames.length) {
+      els.imuTableBody.innerHTML = `<tr><td colspan="7" style="text-align:left">No log loaded.</td></tr>`;
+      return;
+    }
+    const series = getFrameSeries(currentIndex);
+    let html = "";
+    for (let i = 0; i < N_IMU; i++) {
+      const x = IMU_POS_ABS[i];
+      html += `<tr>
+        <td>IMU ${i}</td>
+        <td>${format(x, 3)}</td>
+        <td>${format(IMU_THICKNESS_M[i] * 1000, 1)}</td>
+        <td>${format(series.frame.pitch[i], 2)}</td>
+        <td>${format(series.frame.roll[i], 2)}</td>
+        <td>${format(interpAt(series.bendRate, x), 2)}</td>
+        <td>${format(interpAt(series.torsionRate, x), 2)}</td>
+      </tr>`;
+    }
+    els.imuTableBody.innerHTML = html;
+  }
+
+  function drawEmptyPlots() {
+    for (const canvas of [els.sideCanvas, els.bendHeatCanvas, els.torsion3dCanvas, els.torsionHeatCanvas]) {
+      const { ctx, width, height } = prepareCanvas(canvas);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, width, height);
+      drawText(ctx, "Load a TXT log to draw this plot.", width / 2, height / 2, {
+        align: "center", color: "#66707c", font: "14px Segoe UI, Arial, sans-serif"
+      });
+    }
+  }
+
+  function drawAll() {
+    els.bendScaleValue.textContent = Number(els.bendScale.value).toFixed(1);
+    els.torsionScaleValue.textContent = Number(els.torsionScale.value).toFixed(1);
+    drawFactoryProfiles();
+    updateFieldCalibrationNote();
+    if (!frames.length) {
+      drawEmptyPlots();
+      updateTable();
+      updateTimeLabel();
+      return;
+    }
+    drawSideProfile();
+    drawTopHeat();
+    drawTorsion3d();
+    drawTorsionHeatSide();
+    updateTable();
+  }
+
+  function updateTimeLabel() {
+    const frame = frames[currentIndex];
+    els.timeLabel.textContent = frame ? `${format(frame.timeSec, 3)} s` : "0.000 s";
+  }
+
+  function setCalibrationTime(input) {
+    const frame = frames[currentIndex];
+    if (!frame) return;
+    input.value = format(frame.timeSec, 3);
+    handleOptionChange();
+  }
+
+  function setCurrentIndex(index) {
+    currentIndex = clamp(Math.round(index), 0, Math.max(0, frames.length - 1));
+    els.timeSlider.value = String(currentIndex);
+    updateTimeLabel();
+    drawAll();
+  }
+
+  function stopPlayback() {
+    playing = false;
+    els.playButton.textContent = "Play";
+  }
+
+  function startPlayback() {
+    if (!frames.length) return;
+    playing = true;
+    els.playButton.textContent = "Pause";
+    playStartWall = performance.now();
+    playStartLogSec = frames[currentIndex].timeSec;
+  }
+
+  function togglePlayback() {
+    if (playing) stopPlayback();
+    else startPlayback();
+  }
+
+  function findFrameByTimeSec(timeSec) {
+    let lo = 0;
+    let hi = frames.length - 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (frames[mid].timeSec < timeSec) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  function playbackTick(now) {
+    if (playing && frames.length) {
+      const speed = Number(els.speedSelect.value) || 1;
+      const elapsed = (now - playStartWall) / 1000;
+      let target = playStartLogSec + elapsed * speed;
+      const end = frames[frames.length - 1].timeSec;
+      if (target >= end) {
+        if (els.loopPlayback.checked && end > 0) {
+          target %= end;
+          playStartWall = now;
+          playStartLogSec = target;
+        } else {
+          target = end;
+          stopPlayback();
+        }
+      }
+      const nextIndex = findFrameByTimeSec(target);
+      if (nextIndex !== currentIndex) setCurrentIndex(nextIndex);
+    }
+    requestAnimationFrame(playbackTick);
+  }
+
+  async function handleFile() {
+    const file = els.fileInput.files && els.fileInput.files[0];
+    if (!file) return;
+    stopPlayback();
+    currentFileName = file.name;
+    setStatus(`Reading ${file.name}...`);
+    try {
+      const text = await file.text();
+      rawRows = parseLog(text);
+      currentIndex = 0;
+      if (!rawRows.length) {
+        frames = [];
+        stats = null;
+        els.timeSlider.disabled = true;
+        els.playButton.disabled = true;
+        setStatus("No numeric rows were found. Expected time_ms plus 16 IMU columns.");
+        drawAll();
+        return;
+      }
+      rebuildFrames();
+    } catch (error) {
+      frames = [];
+      stats = null;
+      els.timeSlider.disabled = true;
+      els.playButton.disabled = true;
+      setStatus(`Could not read file: ${error.message}`);
+      drawAll();
+    }
+  }
+
+  async function handleFactoryFile() {
+    const file = els.factoryInput.files && els.factoryInput.files[0];
+    if (!file) return;
+    currentFactoryFileName = file.name;
+    setStatus(`Reading factory bend CSV ${file.name}...`);
+    try {
+      const text = await file.text();
+      factoryData = parseFactoryCsv(text);
+      factoryProfileCanvases = [];
+      factoryCardsDirty = true;
+      if (rawRows.length) {
+        rebuildFrames();
+      } else {
+        setStatus(`Loaded ${factoryData.loadsKg.length} factory load profiles from ${file.name}. Upload a TXT log to apply this envelope to the IMU side view.`);
+        drawAll();
+      }
+    } catch (error) {
+      factoryData = null;
+      factoryProfileCanvases = [];
+      factoryCardsDirty = true;
+      setStatus(`Could not read factory CSV: ${error.message}`);
+      if (rawRows.length) rebuildFrames();
+      else drawAll();
+    }
+  }
+
+  function handleOptionChange() {
+    if (!rawRows.length) drawAll();
+    else rebuildFrames();
+  }
+
+  function setupEvents() {
+    els.fileInput.addEventListener("change", handleFile);
+    els.factoryInput.addEventListener("change", handleFactoryFile);
+    els.playButton.addEventListener("click", togglePlayback);
+    els.timeSlider.addEventListener("input", () => {
+      stopPlayback();
+      setCurrentIndex(Number(els.timeSlider.value));
+    });
+
+    for (const el of [
+      els.columnMode, els.baselineCount, els.smoothWindow, els.targetLoad, els.outlierPercentile,
+      els.standLoad, els.standStart, els.standEnd, els.stompLoad, els.stompStart, els.stompEnd,
+      els.subtractImu3, els.removeBaseline, els.anchorTips
+    ]) {
+      el.addEventListener("change", handleOptionChange);
+    }
+    els.standStartButton.addEventListener("click", () => setCalibrationTime(els.standStart));
+    els.standEndButton.addEventListener("click", () => setCalibrationTime(els.standEnd));
+    els.stompStartButton.addEventListener("click", () => setCalibrationTime(els.stompStart));
+    els.stompEndButton.addEventListener("click", () => setCalibrationTime(els.stompEnd));
+
+    els.heatMode.addEventListener("change", drawAll);
+    els.bendScale.addEventListener("input", drawAll);
+    els.torsionScale.addEventListener("input", drawAll);
+    window.addEventListener("resize", () => {
+      factoryCardsDirty = true;
+      drawAll();
+    });
+
+    els.torsion3dCanvas.addEventListener("pointerdown", (event) => {
+      view3d.drag = true;
+      view3d.lastX = event.clientX;
+      view3d.lastY = event.clientY;
+      els.torsion3dCanvas.classList.add("dragging");
+      els.torsion3dCanvas.setPointerCapture(event.pointerId);
+    });
+    els.torsion3dCanvas.addEventListener("pointermove", (event) => {
+      if (!view3d.drag) return;
+      const dx = event.clientX - view3d.lastX;
+      const dy = event.clientY - view3d.lastY;
+      view3d.lastX = event.clientX;
+      view3d.lastY = event.clientY;
+      view3d.yaw += dx * 0.008;
+      view3d.pitch = clamp(view3d.pitch + dy * 0.006, -1.15, 1.15);
+      drawTorsion3d();
+    });
+    els.torsion3dCanvas.addEventListener("pointerup", (event) => {
+      view3d.drag = false;
+      els.torsion3dCanvas.classList.remove("dragging");
+      els.torsion3dCanvas.releasePointerCapture(event.pointerId);
+    });
+    els.torsion3dCanvas.addEventListener("pointercancel", () => {
+      view3d.drag = false;
+      els.torsion3dCanvas.classList.remove("dragging");
+    });
+  }
+
+  setupEvents();
+  drawAll();
+  requestAnimationFrame(playbackTick);
+})();
+</script>
+</body>
+</html>

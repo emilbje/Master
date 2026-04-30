@@ -1,0 +1,964 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Madshus Ski Bend Visualisation</title>
+<style>
+  :root {
+    --bg: #f3f5f4;
+    --panel: #ffffff;
+    --ink: #1f2420;
+    --muted: #606963;
+    --line: #d5ded8;
+    --line-strong: #aebbb3;
+    --green: #007c68;
+    --red: #c44131;
+    --amber: #b77c00;
+    --button: #eef3f0;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 14px;
+  }
+
+  header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 390px);
+    gap: 18px;
+    align-items: end;
+    padding: 20px 24px 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .eyebrow {
+    margin: 0 0 5px;
+    color: var(--green);
+    font-size: 12px;
+    font-weight: 750;
+    letter-spacing: 0;
+    text-transform: uppercase;
+  }
+
+  h1 {
+    margin: 0 0 8px;
+    font-size: 28px;
+    line-height: 1.12;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 17px;
+  }
+
+  p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 5px;
+    color: #303832;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  input,
+  select,
+  button {
+    min-height: 36px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+    font: inherit;
+  }
+
+  input[type="file"] {
+    width: 100%;
+    padding: 6px 8px;
+  }
+
+  select {
+    width: 100%;
+    padding: 5px 8px;
+  }
+
+  button {
+    cursor: pointer;
+    background: var(--button);
+    padding: 7px 10px;
+    font-weight: 700;
+  }
+
+  button:hover,
+  button:focus-visible {
+    border-color: var(--green);
+    outline: none;
+  }
+
+  main {
+    display: grid;
+    gap: 14px;
+    padding: 14px 24px 24px;
+  }
+
+  section {
+    min-width: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px;
+  }
+
+  .source-panel {
+    display: grid;
+    gap: 8px;
+  }
+
+  #status {
+    min-height: 20px;
+    color: var(--muted);
+    line-height: 1.35;
+  }
+
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    align-items: end;
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .stat {
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    background: #fbfcfb;
+  }
+
+  .stat span {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .stat strong {
+    display: block;
+    overflow-wrap: anywhere;
+    font-size: 17px;
+    line-height: 1.2;
+  }
+
+  .plot-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+    margin-bottom: 10px;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 9px 14px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .legend span {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    white-space: nowrap;
+  }
+
+  .swatch {
+    width: 22px;
+    height: 4px;
+    border-radius: 4px;
+    background: currentColor;
+  }
+
+  .swatch.unloaded { color: rgba(77, 100, 104, .42); }
+  .swatch.loaded { color: var(--green); }
+  .swatch.marker { color: var(--red); }
+
+  canvas {
+    display: block;
+    width: 100%;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+  }
+
+  #mainCanvas {
+    height: 430px;
+    cursor: crosshair;
+  }
+
+  .readout {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .load-grid-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: baseline;
+    margin-bottom: 10px;
+  }
+
+  #loadGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 10px;
+  }
+
+  .load-card {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+    text-align: left;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    padding: 8px;
+  }
+
+  .load-card.selected {
+    border-color: var(--green);
+    box-shadow: inset 0 0 0 1px var(--green);
+  }
+
+  .load-card-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    color: var(--ink);
+    font-weight: 750;
+  }
+
+  .load-card-title small {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .mini-canvas {
+    height: 150px;
+  }
+
+  .note {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .empty {
+    padding: 18px;
+    border: 1px dashed var(--line-strong);
+    border-radius: 8px;
+    color: var(--muted);
+    background: #fbfcfb;
+  }
+
+  @media (max-width: 920px) {
+    header {
+      grid-template-columns: 1fr;
+      align-items: start;
+    }
+
+    .controls,
+    .stat-grid,
+    .readout {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 560px) {
+    header,
+    main {
+      padding-left: 12px;
+      padding-right: 12px;
+    }
+
+    h1 {
+      font-size: 23px;
+    }
+
+    .controls,
+    .stat-grid,
+    .readout {
+      grid-template-columns: 1fr;
+    }
+
+    #mainCanvas {
+      height: 360px;
+    }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <p class="eyebrow">Madshus profile data</p>
+    <h1>Ski bend visualisation</h1>
+    <p>Distances use the balance point as zero. Negative x is in front of balance point, positive x is behind it. Clearance is the measured distance from the plane surface to the underside of the ski.</p>
+  </div>
+  <div class="source-panel">
+    <div>
+      <label for="csvFile">CSV file</label>
+      <input id="csvFile" type="file" accept=".csv,text/csv">
+    </div>
+    <div id="status">Loading E0040150E0782628.csv from this folder...</div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="controls">
+      <div>
+        <label for="loadSelect">Main load</label>
+        <select id="loadSelect" disabled></select>
+      </div>
+      <div>
+        <label for="scaleSelect">Vertical scale</label>
+        <select id="scaleSelect">
+          <option value="1">1x true geometry</option>
+          <option value="2">2x inspection</option>
+          <option value="4">4x inspection</option>
+          <option value="6" selected>6x inspection</option>
+          <option value="8">8x inspection</option>
+          <option value="10">10x inspection</option>
+        </select>
+      </div>
+      <div>
+        <button id="resetView" type="button">Reset to max load</button>
+      </div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat"><span>Loaded source</span><strong id="statSource">-</strong></div>
+      <div class="stat"><span>Profile points</span><strong id="statPoints">-</strong></div>
+      <div class="stat"><span>Ski coordinate range</span><strong id="statXRange">-</strong></div>
+      <div class="stat"><span>Clearance range</span><strong id="statYRange">-</strong></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="plot-head">
+      <h2 id="mainTitle">Main profile</h2>
+      <div class="legend">
+        <span><i class="swatch unloaded"></i>Unloaded ski</span>
+        <span><i class="swatch loaded"></i>Selected load</span>
+        <span><i class="swatch marker"></i>+140 mm load point</span>
+      </div>
+    </div>
+    <canvas id="mainCanvas"></canvas>
+    <div class="readout">
+      <div class="stat"><span>Selected clearance at +140 mm</span><strong id="statLoadPoint">-</strong></div>
+      <div class="stat"><span>Minimum selected clearance</span><strong id="statMinClearance">-</strong></div>
+      <div class="stat"><span>Maximum closing vs unloaded</span><strong id="statMaxClose">-</strong></div>
+      <div class="stat"><span>Pointer measurement</span><strong id="statPointer">Move over plot</strong></div>
+    </div>
+    <p class="note">Lines connect the raw 1 mm profile points. The same x and y ranges are used for every load; the vertical scale selector only magnifies the y dimension.</p>
+  </section>
+
+  <section>
+    <div class="load-grid-head">
+      <h2>Load plots</h2>
+      <p id="loadGridMeta">Each plot overlays the selected load column on the unloaded profile.</p>
+    </div>
+    <div id="loadGrid" class="empty">Waiting for CSV data.</div>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+
+  const DEFAULT_CSV = "E0040150E0782628.csv";
+  const LOAD_POINT_X = 140;
+
+  const els = {
+    csvFile: document.getElementById("csvFile"),
+    status: document.getElementById("status"),
+    loadSelect: document.getElementById("loadSelect"),
+    scaleSelect: document.getElementById("scaleSelect"),
+    resetView: document.getElementById("resetView"),
+    statSource: document.getElementById("statSource"),
+    statPoints: document.getElementById("statPoints"),
+    statXRange: document.getElementById("statXRange"),
+    statYRange: document.getElementById("statYRange"),
+    statLoadPoint: document.getElementById("statLoadPoint"),
+    statMinClearance: document.getElementById("statMinClearance"),
+    statMaxClose: document.getElementById("statMaxClose"),
+    statPointer: document.getElementById("statPointer"),
+    mainTitle: document.getElementById("mainTitle"),
+    mainCanvas: document.getElementById("mainCanvas"),
+    loadGrid: document.getElementById("loadGrid"),
+    loadGridMeta: document.getElementById("loadGridMeta")
+  };
+
+  const canvasMetrics = new WeakMap();
+  let data = null;
+  let selectedLoad = 0;
+  let referenceLoad = 0;
+  let verticalScale = Number(els.scaleSelect.value);
+  let pointerIndex = null;
+  let miniCanvases = [];
+
+  function parseNumber(value) {
+    if (typeof value !== "string") return Number.NaN;
+    const trimmed = value.trim();
+    if (!trimmed) return Number.NaN;
+    return Number(trimmed.replace(/\s/g, "").replace(",", "."));
+  }
+
+  function parseCsv(text, sourceName) {
+    const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    if (lines.length < 2) throw new Error("CSV needs a header row and profile rows.");
+
+    const header = lines[0].split(",").map(cell => cell.trim());
+    const loads = header.slice(1).map(parseNumber);
+    if (!loads.length || loads.some(load => !Number.isFinite(load))) {
+      throw new Error("Could not read load values from the first row.");
+    }
+
+    const points = [];
+    let yMin = Number.POSITIVE_INFINITY;
+    let yMax = Number.NEGATIVE_INFINITY;
+
+    for (let rowIndex = 1; rowIndex < lines.length; rowIndex += 1) {
+      const cells = lines[rowIndex].split(",");
+      if (cells.length < loads.length + 1) continue;
+      const x = parseNumber(cells[0]);
+      const values = loads.map((_, index) => parseNumber(cells[index + 1]));
+      if (!Number.isFinite(x) || values.some(value => !Number.isFinite(value))) continue;
+
+      values.forEach(value => {
+        yMin = Math.min(yMin, value);
+        yMax = Math.max(yMax, value);
+      });
+      points.push({ x, values });
+    }
+
+    if (points.length < 2) throw new Error("No usable profile points were found.");
+    points.sort((a, b) => a.x - b.x);
+
+    const xMin = points[0].x;
+    const xMax = points[points.length - 1].x;
+    const loadPointIndex = nearestIndex(points, LOAD_POINT_X);
+
+    return {
+      sourceName,
+      loads,
+      points,
+      xMin,
+      xMax,
+      yMin: Math.min(0, yMin),
+      yMax: Math.max(0, yMax),
+      loadPointIndex
+    };
+  }
+
+  function nearestIndex(points, x) {
+    let low = 0;
+    let high = points.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (points[mid].x < x) low = mid + 1;
+      else high = mid - 1;
+    }
+    if (low <= 0) return 0;
+    if (low >= points.length) return points.length - 1;
+    return Math.abs(points[low].x - x) < Math.abs(points[low - 1].x - x) ? low : low - 1;
+  }
+
+  function fmt(value, digits = 2) {
+    if (!Number.isFinite(value)) return "-";
+    const normalized = Math.abs(value) < 1e-12 ? 0 : value;
+    return normalized.toLocaleString("en-US", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: digits
+    });
+  }
+
+  function loadLabel(index) {
+    if (!data) return "-";
+    const label = `${fmt(data.loads[index], 1)} kg`;
+    return index === 0 ? `${label} unloaded` : label;
+  }
+
+  function loadColor(index) {
+    if (!data || data.loads.length <= 1) return "#007c68";
+    const t = index / (data.loads.length - 1);
+    const hue = 165 - t * 155;
+    const lightness = 31 + Math.sin(t * Math.PI) * 4;
+    return `hsl(${hue}, 74%, ${lightness}%)`;
+  }
+
+  function setStatus(message, isError = false) {
+    els.status.textContent = message;
+    els.status.style.color = isError ? "var(--red)" : "var(--muted)";
+  }
+
+  function setData(nextData) {
+    data = nextData;
+    selectedLoad = Math.max(0, data.loads.length - 1);
+    referenceLoad = 0;
+    pointerIndex = null;
+
+    els.loadSelect.innerHTML = "";
+    data.loads.forEach((_, index) => {
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = loadLabel(index);
+      els.loadSelect.appendChild(option);
+    });
+    els.loadSelect.value = String(selectedLoad);
+    els.loadSelect.disabled = false;
+
+    els.statSource.textContent = data.sourceName;
+    els.statPoints.textContent = fmt(data.points.length, 0);
+    els.statXRange.textContent = `${fmt(data.xMin, 0)} to ${fmt(data.xMax, 0)} mm`;
+    els.statYRange.textContent = `${fmt(data.yMin, 2)} to ${fmt(data.yMax, 2)} mm`;
+    els.loadGridMeta.textContent = `${data.loads.length} load columns, all drawn against the same unloaded reference.`;
+
+    renderLoadGrid();
+    updateSelectedStats();
+    redrawAll();
+    setStatus(`Loaded ${data.sourceName}.`);
+  }
+
+  function renderLoadGrid() {
+    miniCanvases = [];
+    els.loadGrid.classList.remove("empty");
+    els.loadGrid.innerHTML = "";
+
+    data.loads.forEach((_, index) => {
+      const card = document.createElement("button");
+      card.type = "button";
+      card.className = "load-card";
+      card.dataset.index = String(index);
+
+      const title = document.createElement("div");
+      title.className = "load-card-title";
+      const name = document.createElement("span");
+      name.textContent = loadLabel(index);
+      const close = document.createElement("small");
+      close.textContent = closingSummary(index);
+      title.append(name, close);
+
+      const canvas = document.createElement("canvas");
+      canvas.className = "mini-canvas";
+      canvas.setAttribute("aria-label", `${loadLabel(index)} profile plot`);
+
+      card.append(title, canvas);
+      card.addEventListener("click", () => {
+        selectedLoad = index;
+        els.loadSelect.value = String(index);
+        pointerIndex = null;
+        updateSelectedStats();
+        redrawAll();
+        els.mainCanvas.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+
+      els.loadGrid.appendChild(card);
+      miniCanvases.push({ card, canvas, index });
+    });
+  }
+
+  function closingSummary(index) {
+    if (!data || index === referenceLoad) return "reference";
+    let maxClosing = Number.NEGATIVE_INFINITY;
+    for (const point of data.points) {
+      maxClosing = Math.max(maxClosing, point.values[referenceLoad] - point.values[index]);
+    }
+    return `${fmt(maxClosing, 2)} mm close`;
+  }
+
+  function updateSelectedStats() {
+    if (!data) return;
+    els.mainTitle.textContent = `${loadLabel(selectedLoad)} profile`;
+
+    const loadPoint = data.points[data.loadPointIndex];
+    const loadValue = loadPoint.values[selectedLoad];
+    const refValue = loadPoint.values[referenceLoad];
+    els.statLoadPoint.textContent = `${fmt(loadValue, 2)} mm at x ${fmt(loadPoint.x, 0)} (${fmt(refValue - loadValue, 2)} mm closing)`;
+
+    let minClearance = Number.POSITIVE_INFINITY;
+    let minPoint = data.points[0];
+    let maxClosing = Number.NEGATIVE_INFINITY;
+    let maxClosingPoint = data.points[0];
+
+    for (const point of data.points) {
+      const selected = point.values[selectedLoad];
+      const closing = point.values[referenceLoad] - selected;
+      if (selected < minClearance) {
+        minClearance = selected;
+        minPoint = point;
+      }
+      if (closing > maxClosing) {
+        maxClosing = closing;
+        maxClosingPoint = point;
+      }
+    }
+
+    els.statMinClearance.textContent = `${fmt(minClearance, 2)} mm at x ${fmt(minPoint.x, 0)}`;
+    els.statMaxClose.textContent = `${fmt(maxClosing, 2)} mm at x ${fmt(maxClosingPoint.x, 0)}`;
+    updatePointerReadout();
+  }
+
+  function updatePointerReadout() {
+    if (!data || pointerIndex === null) {
+      els.statPointer.textContent = "Move over plot";
+      return;
+    }
+    const point = data.points[pointerIndex];
+    const selected = point.values[selectedLoad];
+    const reference = point.values[referenceLoad];
+    els.statPointer.textContent = `x ${fmt(point.x, 0)}: ${fmt(selected, 2)} mm, closing ${fmt(reference - selected, 2)} mm`;
+  }
+
+  function configureCanvas(canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(240, Math.round(rect.width));
+    const height = Math.max(120, Math.round(rect.height));
+    const dpr = window.devicePixelRatio || 1;
+    const targetWidth = Math.round(width * dpr);
+    const targetHeight = Math.round(height * dpr);
+    if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { ctx, width, height };
+  }
+
+  function chartMetrics(width, height, mini) {
+    const margin = mini
+      ? { left: 30, right: 12, top: 18, bottom: 25 }
+      : { left: 62, right: 28, top: 34, bottom: 48 };
+    const innerW = Math.max(1, width - margin.left - margin.right);
+    const innerH = Math.max(1, height - margin.top - margin.bottom);
+    const xRange = Math.max(1, data.xMax - data.xMin);
+    const yRange = Math.max(1, data.yMax - data.yMin);
+    const widthScale = innerW / xRange;
+    const heightScale = innerH / (yRange * verticalScale);
+    const xScale = Math.min(widthScale, heightScale);
+    const yScale = xScale * verticalScale;
+    const usedW = xRange * xScale;
+    const usedH = yRange * yScale;
+    const left = margin.left + (innerW - usedW) / 2;
+    const bottom = height - margin.bottom;
+    const top = bottom - usedH;
+    return {
+      margin,
+      left,
+      right: left + usedW,
+      top,
+      bottom,
+      xScale,
+      yScale,
+      xToPx: x => left + (x - data.xMin) * xScale,
+      yToPx: y => bottom - (y - data.yMin) * yScale,
+      pxToX: px => data.xMin + (px - left) / xScale
+    };
+  }
+
+  function clearCanvas(ctx, width, height) {
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function drawAxes(ctx, m, width, height, mini) {
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.font = mini ? "10px Segoe UI, Arial" : "12px Segoe UI, Arial";
+    ctx.textBaseline = "middle";
+
+    ctx.strokeStyle = "#dce4df";
+    ctx.fillStyle = "#657068";
+
+    const xStep = mini ? 500 : 200;
+    const firstX = Math.ceil(data.xMin / xStep) * xStep;
+    for (let x = firstX; x <= data.xMax; x += xStep) {
+      const px = m.xToPx(x);
+      ctx.beginPath();
+      ctx.moveTo(px, m.top);
+      ctx.lineTo(px, m.bottom);
+      ctx.stroke();
+      if (!mini) {
+        ctx.textAlign = "center";
+        ctx.fillText(String(x), px, height - 23);
+      }
+    }
+
+    const yStep = 5;
+    let lastLabelY = Number.POSITIVE_INFINITY;
+    for (let y = Math.ceil(data.yMin / yStep) * yStep; y <= data.yMax + 0.001; y += yStep) {
+      const py = m.yToPx(y);
+      ctx.beginPath();
+      ctx.moveTo(m.left, py);
+      ctx.lineTo(m.right, py);
+      ctx.stroke();
+      if (!mini && Math.abs(py - lastLabelY) > 17) {
+        ctx.textAlign = "right";
+        ctx.fillText(String(y), m.left - 8, py);
+        lastLabelY = py;
+      }
+    }
+
+    ctx.strokeStyle = "#7d8981";
+    ctx.beginPath();
+    ctx.moveTo(m.left, m.yToPx(0));
+    ctx.lineTo(m.right, m.yToPx(0));
+    ctx.stroke();
+
+    drawVerticalMarker(ctx, m, 0, "#b77c00", mini ? "" : "balance");
+    drawVerticalMarker(ctx, m, LOAD_POINT_X, "#c44131", mini ? "" : "+140 mm load");
+
+    if (!mini) {
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#4f5a53";
+      ctx.fillText("front of balance point", m.left + 120, height - 10);
+      ctx.fillText("behind balance point", m.right - 120, height - 10);
+
+      ctx.save();
+      ctx.translate(16, (m.top + m.bottom) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = "center";
+      ctx.fillText("clearance above plane, mm", 0, 0);
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  function drawVerticalMarker(ctx, m, x, color, label) {
+    const px = m.xToPx(x);
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(px, m.top);
+    ctx.lineTo(px, m.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (label) {
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.font = "12px Segoe UI, Arial";
+      ctx.fillText(label, px, m.top + 4);
+    }
+    ctx.restore();
+  }
+
+  function drawProfile(ctx, m, loadIndex, style, lineWidth) {
+    ctx.save();
+    ctx.strokeStyle = style;
+    ctx.lineWidth = lineWidth;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    data.points.forEach((point, index) => {
+      const x = m.xToPx(point.x);
+      const y = m.yToPx(point.values[loadIndex]);
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawLoadPointDot(ctx, m, loadIndex, mini) {
+    const point = data.points[data.loadPointIndex];
+    const x = m.xToPx(point.x);
+    const y = m.yToPx(point.values[loadIndex]);
+    ctx.save();
+    ctx.fillStyle = loadColor(loadIndex);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = mini ? 1.5 : 2;
+    ctx.beginPath();
+    ctx.arc(x, y, mini ? 3.2 : 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawHover(ctx, m) {
+    if (pointerIndex === null) return;
+    const point = data.points[pointerIndex];
+    const x = m.xToPx(point.x);
+    const ySelected = m.yToPx(point.values[selectedLoad]);
+    const yReference = m.yToPx(point.values[referenceLoad]);
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(31, 36, 32, .55)";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, m.top);
+    ctx.lineTo(x, m.bottom);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = loadColor(selectedLoad);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, ySelected, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(77, 100, 104, .65)";
+    ctx.beginPath();
+    ctx.arc(x, yReference, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawScaleBadge(ctx, width, mini) {
+    ctx.save();
+    ctx.font = mini ? "10px Segoe UI, Arial" : "12px Segoe UI, Arial";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#606963";
+    ctx.fillText(`${verticalScale}x vertical`, width - 12, mini ? 6 : 12);
+    ctx.restore();
+  }
+
+  function drawChart(canvas, loadIndex, mini = false) {
+    if (!data) return;
+    const { ctx, width, height } = configureCanvas(canvas);
+    const m = chartMetrics(width, height, mini);
+    canvasMetrics.set(canvas, m);
+    clearCanvas(ctx, width, height);
+    drawAxes(ctx, m, width, height, mini);
+
+    drawProfile(ctx, m, referenceLoad, "rgba(77, 100, 104, .20)", mini ? 7 : 12);
+    drawProfile(ctx, m, referenceLoad, "rgba(77, 100, 104, .48)", mini ? 1.5 : 2.3);
+    drawProfile(ctx, m, loadIndex, loadColor(loadIndex), mini ? 1.7 : 3);
+    drawLoadPointDot(ctx, m, loadIndex, mini);
+
+    if (!mini) drawHover(ctx, m);
+    drawScaleBadge(ctx, width, mini);
+
+    if (mini) {
+      ctx.save();
+      ctx.font = "11px Segoe UI, Arial";
+      ctx.fillStyle = "#303832";
+      ctx.textBaseline = "top";
+      ctx.fillText(loadLabel(loadIndex), 8, 6);
+      ctx.restore();
+    }
+  }
+
+  function redrawAll() {
+    if (!data) return;
+    drawChart(els.mainCanvas, selectedLoad, false);
+    for (const item of miniCanvases) {
+      item.card.classList.toggle("selected", item.index === selectedLoad);
+      drawChart(item.canvas, item.index, true);
+    }
+  }
+
+  function handlePointerMove(event) {
+    if (!data) return;
+    const m = canvasMetrics.get(els.mainCanvas);
+    if (!m) return;
+    const rect = els.mainCanvas.getBoundingClientRect();
+    const xPx = event.clientX - rect.left;
+    const x = Math.max(data.xMin, Math.min(data.xMax, m.pxToX(xPx)));
+    pointerIndex = nearestIndex(data.points, x);
+    updatePointerReadout();
+    drawChart(els.mainCanvas, selectedLoad, false);
+  }
+
+  async function loadDefaultCsv() {
+    try {
+      const response = await fetch(DEFAULT_CSV, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = await response.text();
+      setData(parseCsv(text, DEFAULT_CSV));
+    } catch (error) {
+      setStatus(`Could not auto-load ${DEFAULT_CSV}. Choose the CSV file above.`, true);
+    }
+  }
+
+  els.csvFile.addEventListener("change", async event => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setData(parseCsv(text, file.name));
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  });
+
+  els.loadSelect.addEventListener("change", () => {
+    selectedLoad = Number(els.loadSelect.value);
+    pointerIndex = null;
+    updateSelectedStats();
+    redrawAll();
+  });
+
+  els.scaleSelect.addEventListener("change", () => {
+    verticalScale = Number(els.scaleSelect.value);
+    redrawAll();
+  });
+
+  els.resetView.addEventListener("click", () => {
+    if (!data) return;
+    selectedLoad = data.loads.length - 1;
+    referenceLoad = 0;
+    pointerIndex = null;
+    els.loadSelect.value = String(selectedLoad);
+    updateSelectedStats();
+    redrawAll();
+  });
+
+  els.mainCanvas.addEventListener("pointermove", handlePointerMove);
+  els.mainCanvas.addEventListener("pointerleave", () => {
+    pointerIndex = null;
+    updatePointerReadout();
+    drawChart(els.mainCanvas, selectedLoad, false);
+  });
+
+  window.addEventListener("resize", () => {
+    window.requestAnimationFrame(redrawAll);
+  });
+
+  loadDefaultCsv();
+})();
+</script>
+</body>
+</html>

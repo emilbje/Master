@@ -1,0 +1,37 @@
+<!doctype html><meta charset="utf-8">
+<title>WebSerial test</title>
+<button id="btn">Connect</button>
+<pre id="log" style="white-space:pre-wrap"></pre>
+<script>
+const log = (...a)=>{ document.getElementById('log').textContent += a.join(' ')+'\n'; };
+if (!('serial' in navigator)) log('WebSerial not supported. Use Chrome/Edge via localhost/https.');
+let port, reader;
+
+document.getElementById('btn').onclick = async ()=>{
+  try{
+    log('requestPort…'); 
+    port = await navigator.serial.requestPort(); // you should see a picker now
+    log('open…'); 
+    await port.open({ baudRate: 115200 });
+    log('opened.');
+    const textDecoder = new TextDecoderStream();
+    port.readable.pipeTo(textDecoder.writable);
+    reader = textDecoder.readable.getReader();
+    readLoop();
+  }catch(e){
+    log('ERROR:', e.name, e.message);
+    console.error(e);
+  }
+};
+
+async function readLoop(){
+  log('reading…');
+  try{
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      if (value) log('RX:', value.replace(/\r?\n/g,'⏎\n'));
+    }
+  } catch(e){ log('read error:', e.name, e.message); }
+}
+</script>
